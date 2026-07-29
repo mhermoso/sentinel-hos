@@ -1,0 +1,45 @@
+# Local infrastructure for DCW development.
+# Usage: make db-up  (or: podman compose up -d)
+#
+# For the full containerized stack (API + worker + DB + Redis):
+#   make stack-up
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dcw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dcw_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dcw_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-dcw_compliance_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - dcw_pgdata:/var/lib/postgresql/data
+      - ./deploy/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dcw_user} -d ${POSTGRES_DB:-dcw_compliance_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: dcw-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - dcw_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  dcw_pgdata:
+  dcw_redisdata:

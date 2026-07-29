@@ -17,12 +17,27 @@ import redis.asyncio as aioredis
 
 from app.core.config import settings
 from app.core.redis import COMPLIANCE_ALERTS_CHANNEL, get_redis
+from app.domains.notifier.alert_logger import log_alert_event
 from app.domains.notifier.schemas import AlertStage, ComplianceAlert
 from app.domains.notifier.suppressor import acquire_alert_lock, should_suppress_alert
 from app.domains.notifier.twilio_sms import send_sms_alert
 from app.domains.notifier.twilio_voice import place_voice_call
 
 logger = logging.getLogger("dcw.notifier.subscriber")
+
+
+def _resolve_phones(alert: ComplianceAlert) -> ComplianceAlert:
+    """Apply test phone overrides from settings when configured."""
+    driver_phone = settings.TWILIO_TEST_TO_PHONE or alert.driver_phone
+    dispatcher_phone = settings.TWILIO_TEST_DISPATCHER_PHONE or alert.dispatcher_phone
+    if driver_phone == alert.driver_phone and dispatcher_phone == alert.dispatcher_phone:
+        return alert
+    return alert.model_copy(
+        update={
+            "driver_phone": driver_phone or None,
+            "dispatcher_phone": dispatcher_phone or None,
+        }
+    )
 
 
 def _parse_alert_event(message_data: str) -> Optional[ComplianceAlert]:
@@ -49,6 +64,7 @@ def _parse_alert_event(message_data: str) -> Optional[ComplianceAlert]:
 
 async def _dispatch_alert(alert: ComplianceAlert) -> None:
     """Apply suppression check then dispatch voice + SMS."""
+    alert = _resolve_phones(alert)
     shift_id = datetime.now(timezone.utc).strftime("%Y%m%d")
 
     suppressed, reason = await should_suppress_alert(
@@ -60,6 +76,12 @@ async def _dispatch_alert(alert: ComplianceAlert) -> None:
     )
 
     if suppressed:
+        log_alert_event(
+            alert,
+            suppressed=True,
+            dispatch_action="suppressed",
+            suppression_reason=reason,
+        )
         logger.debug("Alert suppressed: %s", reason)
         return
 
@@ -72,32 +94,55 @@ async def _dispatch_alert(alert: ComplianceAlert) -> None:
     )
 
     if not acquired:
+        log_alert_event(
+            alert,
+            suppressed=True,
+            dispatch_action="lock_race",
+            suppression_reason="Alert lock race",
+        )
         logger.debug("Alert lock race — skipping duplicate dispatch")
         return
 
     logger.info(
-        "Dispatching alert: driver=%s rule=%s severity=%s",
+        "Dispatching alert: driver=%s rule=%s severity=%s dry_run=%s",
         alert.driver_id,
         alert.rule_ref,
         alert.severity,
+        settings.ALERT_DRY_RUN,
     )
+
+    voice_sid: Optional[str] = None
+    sms_sid: Optional[str] = None
+    dispatch_action = "dry_run" if settings.ALERT_DRY_RUN else "dispatch"
 
     if alert.driver_phone and alert.severity in (
         AlertStage.VIOLATION,
         AlertStage.CRITICAL,
     ):
-        await place_voice_call(alert=alert, to_phone=alert.driver_phone)
+        if settings.ALERT_DRY_RUN:
+            dispatch_action = "skipped_dry_run_voice"
+        else:
+            voice_sid = await place_voice_call(alert=alert, to_phone=alert.driver_phone)
+            dispatch_action = "voice" if voice_sid else "voice_failed"
 
     if alert.dispatcher_phone:
-        await send_sms_alert(alert=alert, to_phone=alert.dispatcher_phone)
+        if settings.ALERT_DRY_RUN:
+            dispatch_action = "skipped_dry_run_sms" if dispatch_action == "dry_run" else dispatch_action
+        else:
+            sms_sid = await send_sms_alert(alert=alert, to_phone=alert.dispatcher_phone)
+            dispatch_action = "sms" if sms_sid else "sms_failed"
+
+    log_alert_event(
+        alert,
+        suppressed=False,
+        dispatch_action=dispatch_action,
+        voice_call_sid=voice_sid,
+        sms_sid=sms_sid,
+    )
 
 
 async def run_subscriber_loop() -> None:
-    """Async loop that subscribes to Redis and processes compliance alerts.
-
-    This coroutine runs indefinitely and should be started during
-    app startup via asyncio.create_task().
-    """
+    """Async loop that subscribes to Redis and processes compliance alerts."""
     logger.info("Starting compliance alert subscriber on channel: %s", COMPLIANCE_ALERTS_CHANNEL)
 
     while True:

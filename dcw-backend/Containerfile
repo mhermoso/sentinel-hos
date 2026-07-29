@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1
+
+# ── Stage 1: build dependencies ──────────────────────────────────────────
+FROM python:3.12-slim-bookworm AS builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml ./
+COPY app ./app
+
+RUN pip install --no-cache-dir --prefix=/install .
+
+# ── Stage 2: runtime image ───────────────────────────────────────────────
+FROM python:3.12-slim-bookworm AS runtime
+
+# WeasyPrint system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    libffi-dev \
+    shared-mime-info \
+    libcairo2 \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Run as non-root (ADR-001 rootless Podman requirement)
+RUN groupadd --gid 1000 dcw && \
+    useradd --uid 1000 --gid dcw --create-home --shell /bin/bash dcw
+
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
+COPY app ./app
+COPY pyproject.toml ./
+
+USER dcw
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    ENVIRONMENT=production
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

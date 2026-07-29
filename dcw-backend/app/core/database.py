@@ -51,8 +51,36 @@ async def get_session() -> AsyncSession:
 
 async def init_db() -> None:
     """Create all tables (development convenience — use Alembic in production)."""
+    # Import ORM models so they register with Base.metadata before create_all.
+    import app.domains.engine.models  # noqa: F401
+    import app.domains.ingestion.models  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_append_only_trigger)
+
+
+def _ensure_append_only_trigger(connection) -> None:
+    """Attach append-only trigger to canonical_hos_logs if not already present."""
+    from sqlalchemy import text
+
+    connection.execute(
+        text(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger
+                    WHERE tgname = 'trg_canonical_hos_logs_no_mutation'
+                ) THEN
+                    CREATE TRIGGER trg_canonical_hos_logs_no_mutation
+                    BEFORE UPDATE OR DELETE ON canonical_hos_logs
+                    FOR EACH ROW EXECUTE FUNCTION dcw_block_canonical_mutation();
+                END IF;
+            END $$;
+            """
+        )
+    )
 
 
 async def close_db() -> None:

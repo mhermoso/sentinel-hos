@@ -16,3 +16,9 @@ htmlcov/
 *.sqlite3
 pgdata/
 redisdata/
+data/
+reports/
+logs/
+data/
+reports/
+logs/

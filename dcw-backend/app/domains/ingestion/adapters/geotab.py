@@ -68,6 +68,21 @@ def _extract_location(raw_log: Dict[str, Any]) -> Tuple[Optional[float], Optiona
     return latitude, longitude
 
 
+def _extract_driver_id(raw_log: Dict[str, Any]) -> str:
+    """Resolve driver ID from Geotab DutyStatusLog (dict ref, string ref, or device fallback)."""
+    driver_ref = raw_log.get("driver")
+    if isinstance(driver_ref, dict) and driver_ref.get("id"):
+        return str(driver_ref["id"])
+    if isinstance(driver_ref, str) and driver_ref and driver_ref != "NoUserId":
+        return driver_ref
+
+    device_dict = raw_log.get("device")
+    if isinstance(device_dict, dict) and device_dict.get("id"):
+        return f"unassigned:device:{device_dict['id']}"
+
+    return "UNKNOWN_DRIVER"
+
+
 def map_geotab_log_to_canonical(
     raw_log: Dict[str, Any],
     tenant_id: str,
@@ -80,11 +95,7 @@ def map_geotab_log_to_canonical(
     """
     raw_id = str(raw_log.get("id", ""))
 
-    # Driver ID extraction
-    driver_dict = raw_log.get("driver")
-    driver_id = "UNKNOWN_DRIVER"
-    if isinstance(driver_dict, dict) and driver_dict.get("id"):
-        driver_id = str(driver_dict["id"])
+    driver_id = _extract_driver_id(raw_log)
 
     # Device ID extraction
     device_dict = raw_log.get("device")

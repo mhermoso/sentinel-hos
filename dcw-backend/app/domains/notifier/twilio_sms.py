@@ -1,18 +1,14 @@
-"""Twilio SMS fallback engine.
-
-Sends immediate text messages to dispatchers and safety officers when
-voice calls are unacknowledged or for lower-severity warnings.
-
-Stub implementation — wire in real Twilio SDK when credentials are set.
-"""
+"""Twilio SMS fallback engine."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
 from app.core.config import settings
 from app.domains.notifier.schemas import ComplianceAlert
+from app.domains.notifier.twilio_client import get_twilio_client, twilio_configured
 
 logger = logging.getLogger("dcw.notifier.twilio_sms")
 
@@ -23,9 +19,8 @@ def _build_sms_body(alert: ComplianceAlert) -> str:
         "WARNING": "⚠️",
         "VIOLATION": "🚨",
         "CRITICAL": "🔴",
-    }.get(alert.severity, "⚠️")
+    }.get(alert.severity.value, "⚠️")
 
-    remaining_info = ""
     return (
         f"{severity_emoji} DCW HOS ALERT {severity_emoji}\n"
         f"Driver: {alert.driver_name or alert.driver_id}\n"
@@ -39,43 +34,42 @@ async def send_sms_alert(
     alert: ComplianceAlert,
     to_phone: str,
 ) -> Optional[str]:
-    """Send a Twilio SMS compliance alert to a dispatcher or driver.
+    """Send a Twilio SMS compliance alert to a dispatcher or driver."""
+    if settings.ALERT_DRY_RUN:
+        logger.info(
+            "[DRY_RUN] SMS skipped: driver=%s phone=%s body=%s",
+            alert.driver_id,
+            to_phone,
+            _build_sms_body(alert).replace("\n", " | "),
+        )
+        return None
 
-    Args:
-        alert: The compliance alert to communicate.
-        to_phone: Target phone number in E.164 format.
-
-    Returns:
-        Twilio message SID if sent successfully, None on failure.
-
-    Note:
-        Stub — configure TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN to enable.
-    """
-    if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
+    if not twilio_configured():
         logger.warning(
             "Twilio credentials not configured — SMS skipped for driver %s",
             alert.driver_id,
         )
         return None
 
-    try:
-        # Real implementation:
-        # from twilio.rest import Client
-        # client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        # message = client.messages.create(
-        #     body=_build_sms_body(alert),
-        #     to=to_phone,
-        #     from_=settings.TWILIO_FROM_PHONE_NUMBER,
-        # )
-        # return message.sid
+    client = get_twilio_client()
+    if client is None:
+        return None
 
+    try:
         body = _build_sms_body(alert)
-        logger.info(
-            "[STUB] SMS would be sent to %s: %s",
-            to_phone,
-            body.replace("\n", " | "),
-        )
-        return "STUB_SMS_SID"
+        loop = asyncio.get_running_loop()
+
+        def _create_message() -> str:
+            message = client.messages.create(
+                body=body,
+                to=to_phone,
+                from_=settings.TWILIO_FROM_PHONE_NUMBER,
+            )
+            return str(message.sid)
+
+        sms_sid = await loop.run_in_executor(None, _create_message)
+        logger.info("SMS sent: sid=%s driver=%s", sms_sid, alert.driver_id)
+        return sms_sid
 
     except Exception as exc:
         logger.error("Twilio SMS failed for driver %s: %s", alert.driver_id, exc)

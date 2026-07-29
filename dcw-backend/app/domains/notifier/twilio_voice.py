@@ -1,31 +1,20 @@
-"""Twilio Voice IVR dispatch — multi-language speech alert system.
-
-Stub implementation with full interface defined. When TWILIO_ACCOUNT_SID
-and TWILIO_AUTH_TOKEN are configured, this module places automated phone
-calls using the Twilio Voice API with <Gather input="speech"> for driver
-language preference detection (English, Español, Français).
-
-Wire in real Twilio SDK calls when credentials are available.
-"""
+"""Twilio Voice IVR dispatch — multi-language speech alert system."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
 from app.core.config import settings
 from app.domains.notifier.schemas import ComplianceAlert
+from app.domains.notifier.twilio_client import get_twilio_client, twilio_configured
 
 logger = logging.getLogger("dcw.notifier.twilio_voice")
 
 
 def _build_twiml_alert(alert: ComplianceAlert, language: str = "en") -> str:
-    """Build TwiML XML for the compliance alert IVR flow.
-
-    The <Gather> verb captures the driver's spoken language preference.
-    In a full implementation, this routes to Amazon Polly Neural TTS
-    in the selected language.
-    """
+    """Build TwiML XML for the compliance alert IVR flow."""
     messages = {
         "en": (
             f"This is an automated safety alert from Driver Compliance Watch. "
@@ -59,45 +48,41 @@ async def place_voice_call(
     alert: ComplianceAlert,
     to_phone: str,
 ) -> Optional[str]:
-    """Initiate a Twilio Voice IVR call for the compliance alert.
+    """Initiate a Twilio Voice IVR call for the compliance alert."""
+    if settings.ALERT_DRY_RUN:
+        logger.info(
+            "[DRY_RUN] Voice call skipped: driver=%s phone=%s",
+            alert.driver_id,
+            to_phone,
+        )
+        return None
 
-    Args:
-        alert: The compliance alert to communicate.
-        to_phone: Target phone number in E.164 format.
-
-    Returns:
-        Twilio call SID if placed successfully, None on failure.
-
-    Note:
-        This is a stub. Configure TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN,
-        and TWILIO_FROM_PHONE_NUMBER to enable real calls.
-    """
-    if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
+    if not twilio_configured():
         logger.warning(
             "Twilio credentials not configured — voice call skipped for driver %s",
             alert.driver_id,
         )
         return None
 
-    try:
-        # Real implementation:
-        # from twilio.rest import Client
-        # client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        # twiml = _build_twiml_alert(alert)
-        # call = client.calls.create(
-        #     twiml=twiml,
-        #     to=to_phone,
-        #     from_=settings.TWILIO_FROM_PHONE_NUMBER,
-        # )
-        # return call.sid
+    client = get_twilio_client()
+    if client is None:
+        return None
 
-        logger.info(
-            "[STUB] Voice call would be placed: driver=%s, phone=%s, rule=%s",
-            alert.driver_id,
-            to_phone,
-            alert.rule_ref,
-        )
-        return "STUB_CALL_SID"
+    try:
+        twiml = _build_twiml_alert(alert)
+        loop = asyncio.get_running_loop()
+
+        def _create_call() -> str:
+            call = client.calls.create(
+                twiml=twiml,
+                to=to_phone,
+                from_=settings.TWILIO_FROM_PHONE_NUMBER,
+            )
+            return str(call.sid)
+
+        call_sid = await loop.run_in_executor(None, _create_call)
+        logger.info("Voice call placed: sid=%s driver=%s", call_sid, alert.driver_id)
+        return call_sid
 
     except Exception as exc:
         logger.error("Twilio voice call failed for driver %s: %s", alert.driver_id, exc)

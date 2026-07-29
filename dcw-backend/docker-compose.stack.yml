@@ -1,0 +1,97 @@
+# Full DCW stack — API + ARQ worker + PostgreSQL + Redis.
+# Usage: make stack-up  (or: podman compose -f docker-compose.stack.yml up -d --build)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dcw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dcw_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dcw_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-dcw_compliance_db}
+    volumes:
+      - dcw_pgdata:/var/lib/postgresql/data
+      - ./deploy/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dcw_user} -d ${POSTGRES_DB:-dcw_compliance_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - dcw-net
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: dcw-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - dcw_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - dcw-net
+
+  api:
+    build:
+      context: .
+      dockerfile: Containerfile
+    container_name: dcw-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dcw_user}:${POSTGRES_PASSWORD:-dcw_secure_password}@postgres:5432/${POSTGRES_DB:-dcw_compliance_db}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - dcw-net
+
+  worker:
+    build:
+      context: .
+      dockerfile: Containerfile
+    container_name: dcw-worker
+    restart: unless-stopped
+    command: ["arq", "app.domains.ingestion.poller.WorkerSettings"]
+    env_file:
+      - .env
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dcw_user}:${POSTGRES_PASSWORD:-dcw_secure_password}@postgres:5432/${POSTGRES_DB:-dcw_compliance_db}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    networks:
+      - dcw-net
+
+volumes:
+  dcw_pgdata:
+  dcw_redisdata:
+
+networks:
+  dcw-net:
+    driver: bridge
