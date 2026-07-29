@@ -5,7 +5,7 @@ Accepts a DriverTimeline, runs the state machine, applies all rules,
 and returns a ComplianceResult in < 20 ms for typical driver histories.
 
 Usage:
-    pack = RulePack(version="fmcsa-us-property@1.2.0")
+    pack = RulePack(version="fmcsa-us-property@1.3.0")
     result = pack.evaluate(timeline, inputs_hash="sha256...")
 """
 
@@ -40,7 +40,7 @@ class RulePack:
         version: SemVer-style identifier bound to each audit record.
     """
 
-    def __init__(self, version: str = "fmcsa-us-property@1.2.0") -> None:
+    def __init__(self, version: str = "fmcsa-us-property@1.3.0") -> None:
         self.version = version
 
     def evaluate(

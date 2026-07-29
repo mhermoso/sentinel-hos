@@ -12,7 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.domains.engine.models import AuditRecord
-from app.domains.engine.replay import compute_weekly_duty_seconds
+from app.domains.engine.replay import (
+    WEEKLY_DUTY_LOOKBACK_BUFFER_DAYS,
+    compute_weekly_duty_seconds,
+)
 from app.domains.engine.schemas import ComplianceResult, DriverTimeline
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.schemas import CanonicalDutyStatus
@@ -83,7 +86,8 @@ class EngineRepository:
     ) -> float:
         """Sum total on-duty seconds over the rolling weekly cycle window."""
         now = as_of if as_of is not None else datetime.now(timezone.utc)
-        cutoff = now - timedelta(days=cycle_days)
+        lookback_days = cycle_days + WEEKLY_DUTY_LOOKBACK_BUFFER_DAYS
+        cutoff = now - timedelta(days=lookback_days)
 
         stmt = (
             select(CanonicalHOSLogRecord)
@@ -92,12 +96,8 @@ class EngineRepository:
                 CanonicalHOSLogRecord.driver_id == driver_id,
                 CanonicalHOSLogRecord.event_timestamp >= cutoff,
                 CanonicalHOSLogRecord.event_timestamp <= now,
-                CanonicalHOSLogRecord.status.in_(
-                    [
-                        CanonicalDutyStatus.ON_DUTY.value,
-                        CanonicalDutyStatus.DRIVING.value,
-                        CanonicalDutyStatus.YARD_MOVE.value,
-                    ]
+                CanonicalHOSLogRecord.status.notin_(
+                    [CanonicalDutyStatus.UNKNOWN.value]
                 ),
             )
             .order_by(CanonicalHOSLogRecord.event_timestamp.asc())

@@ -14,9 +14,12 @@ or LLM scoring involved (per ADR-004).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
+from app.core.config import settings
+from app.domains.engine.replay import RESTART_SECONDS, is_valid_restart_period
 from app.domains.engine.schemas import (
     DriverTimeline,
     ShiftWindow,
@@ -32,9 +35,6 @@ logger = logging.getLogger("dcw.engine.state_machine")
 
 # Qualifying off-duty rest to start a new shift (10 consecutive hours)
 QUALIFYING_OFF_DUTY_SECONDS: float = 10 * 3600.0
-
-# Qualifying 34-hour restart
-RESTART_SECONDS: float = 34 * 3600.0
 
 # Off-duty statuses that count toward rest (OFF or SB)
 _REST_STATUSES = {CanonicalDutyStatus.OFF_DUTY, CanonicalDutyStatus.SLEEPER_BERTH}
@@ -67,6 +67,8 @@ class StateMachineResult:
         self.consecutive_rest_seconds: float = 0.0
         self.last_qualifying_rest_end: Optional[datetime] = None
         self.had_34h_restart: bool = False
+        self.last_valid_restart_at: Optional[datetime] = None
+        self.invalid_restart_at_end: bool = False
 
         # Split sleeper tracking
         self.pending_sb_block: Optional[tuple[datetime, float]] = None  # (start, seconds)
@@ -107,6 +109,7 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
     consecutive_rest_start: Optional[datetime] = None
     consecutive_rest_seconds: float = 0.0
     in_shift = False
+    home_terminal_tz = ZoneInfo(settings.DEFAULT_HOME_TERMINAL_TIMEZONE)
 
     for event in events:
         status = CanonicalDutyStatus(event.status)
@@ -135,9 +138,17 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
                 result.duty_window_elapsed_seconds = 0.0
                 in_shift = True
 
-                # Check for 34h restart
                 if consecutive_rest_seconds >= RESTART_SECONDS:
-                    result.had_34h_restart = True
+                    rest_start = consecutive_rest_start or event.timestamp
+                    if is_valid_restart_period(
+                        rest_start,
+                        event.timestamp,
+                        home_terminal_tz=home_terminal_tz,
+                    ):
+                        result.had_34h_restart = True
+                        result.last_valid_restart_at = event.timestamp
+                    else:
+                        result.invalid_restart_at_end = True
 
             consecutive_rest_start = None
             consecutive_rest_seconds = 0.0

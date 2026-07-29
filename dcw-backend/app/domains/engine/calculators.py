@@ -34,7 +34,6 @@ MAX_DRIVING_SECONDS: float = 11 * 3600.0          # 11h = 39 600 s
 MAX_DUTY_WINDOW_SECONDS: float = 14 * 3600.0      # 14h = 50 400 s
 MAX_DRIVING_BEFORE_BREAK_SECONDS: float = 8 * 3600.0  # 8h  = 28 800 s
 REQUIRED_BREAK_SECONDS: float = 1800.0            # 30 min
-RESTART_SECONDS: float = 34 * 3600.0             # 34h = 122 400 s
 
 # Warning thresholds (trigger at 30 min / 1h remaining)
 WARNING_THRESHOLD_SECONDS: float = 1800.0         # 30 min warning
@@ -244,14 +243,22 @@ def check_restart(
 ) -> List[Violation]:
     """§ 395.3(c) — 34-hour consecutive off-duty restart provision.
 
-    Verifies the restart was valid (consecutive, covers 1–5 AM twice).
-    Currently validates only that 34h were accumulated; time-window
-    validation (1–5 AM) is flagged as a future enhancement.
+    Emits RESTART_INVALID when a driver resumes duty after a rest period that
+    reached 34 hours but failed home-terminal 1–5 AM validation.  Rest still in
+    progress never produces a violation.
     """
     violations: List[Violation] = []
-    # If consecutive rest is in progress and between 10h and 34h,
-    # note that no restart credit applies yet
-    if 0 < state.consecutive_rest_seconds < RESTART_SECONDS and state.had_34h_restart is False:
-        # No violation — just not enough rest for a restart credit
-        pass
+    if state.invalid_restart_at_end:
+        violations.append(
+            Violation(
+                violation_type=ViolationType.RESTART_INVALID,
+                severity=ViolationSeverity.VIOLATION,
+                rule_ref="§ 395.3(c)",
+                description=(
+                    "34-hour restart invalid: requires 34 consecutive hours off duty "
+                    "including two periods between 1:00–5:00 AM home-terminal time."
+                ),
+                detected_at=now,
+            )
+        )
     return violations
