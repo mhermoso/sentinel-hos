@@ -78,3 +78,59 @@ def test_compute_weekly_duty_extends_last_segment_to_as_of() -> None:
     as_of = _ts(2)
     seconds = compute_weekly_duty_seconds(events, as_of=as_of, cycle_days=8)
     assert seconds == pytest.approx(2 * 3600.0)
+
+
+def test_live_evaluate_without_as_of_credits_open_driving_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production sweeps omit as_of; open DRIVING must still count toward 11h."""
+    from app.domains.engine import rule_pack as rule_pack_module
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[no-untyped-def]
+            return _ts(21) if tz is None else _ts(21).astimezone(tz)
+
+    monkeypatch.setattr(rule_pack_module, "datetime", _FixedDatetime)
+
+    pack = RulePack()
+    timeline = _timeline_with_driving_shift()
+    result = pack.evaluate(
+        timeline,
+        inputs_hash="hash-live-open",
+        weekly_duty_seconds=0.0,
+        # as_of omitted — live sweeper path
+    )
+    assert result.driving_remaining_seconds == pytest.approx(0.0)
+    assert any(v.violation_type.value == "DRIVING_LIMIT" for v in result.violations)
+
+
+def test_duty_window_is_consecutive_clock_time() -> None:
+    """§ 395.3(a)(2): off-duty inside a shift must not pause the 14h window."""
+    pack = RulePack()
+    events = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(0)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=_ts(10)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(16)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=_ts(20)),
+    ]
+    timeline = DriverTimeline(driver_id="drv1", tenant_id="tenant1", events=events)
+    # Shift starts at +10h; at +24h wall clock = 14h into the window
+    result = pack.evaluate(
+        timeline,
+        inputs_hash="hash-14h",
+        weekly_duty_seconds=0.0,
+        as_of=_ts(24),
+    )
+    assert result.duty_window_remaining_seconds == pytest.approx(0.0)
+    assert any(v.violation_type.value == "DUTY_WINDOW" for v in result.violations)
+
+
+def test_compute_weekly_duty_stops_at_off_duty() -> None:
+    """OFF after DRIVING must close the duty segment (no gap over-count)."""
+    events = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=_ts(0)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(4)),
+    ]
+    seconds = compute_weekly_duty_seconds(events, as_of=_ts(10), cycle_days=8)
+    assert seconds == pytest.approx(4 * 3600.0)
