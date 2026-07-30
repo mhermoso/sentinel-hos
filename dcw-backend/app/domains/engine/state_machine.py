@@ -146,7 +146,6 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
         if result.current_shift is not None and not is_rest:
             if is_duty:
                 result.current_shift.cumulative_duty_seconds += duration
-                result.duty_window_elapsed_seconds += duration
 
             if is_driving:
                 result.current_shift.cumulative_driving_seconds += duration
@@ -171,6 +170,12 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
     # Finalise last shift
     if result.current_shift is not None:
         result.total_duty_seconds = result.current_shift.cumulative_duty_seconds
+        # 14h window is consecutive clock time from coming on duty
+        # (§ 395.3(a)(2)); off-duty inside the shift does not pause it.
+        end_time = events[-1].timestamp
+        result.duty_window_elapsed_seconds = max(
+            0.0, (end_time - result.current_shift.shift_start).total_seconds()
+        )
 
     result.consecutive_rest_seconds = consecutive_rest_seconds
     return result

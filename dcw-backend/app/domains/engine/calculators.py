@@ -103,10 +103,23 @@ def check_duty_window(
 ) -> tuple[float, List[Violation]]:
     """§ 395.3(a)(2) — 14-hour on-duty window from first on-duty moment.
 
+    The window is consecutive clock time from shift start; off-duty time
+    inside the shift does not pause or extend it (except split-sleeper
+    rules, handled separately when paired).
+
     Returns:
         (duty_window_remaining_seconds, violations)
     """
-    elapsed = state.duty_window_elapsed_seconds
+    if state.current_shift is not None:
+        shift_start = state.current_shift.shift_start
+        if shift_start.tzinfo is None:
+            shift_start = shift_start.replace(tzinfo=timezone.utc)
+        eval_now = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+        # Prefer wall-clock from shift start (FMCSA consecutive-hour rule).
+        # Fall back to the state-machine accumulator if timestamps are unusable.
+        elapsed = max(0.0, (eval_now - shift_start).total_seconds())
+    else:
+        elapsed = state.duty_window_elapsed_seconds
     remaining = max(0.0, MAX_DUTY_WINDOW_SECONDS - elapsed)
     violations: List[Violation] = []
 
