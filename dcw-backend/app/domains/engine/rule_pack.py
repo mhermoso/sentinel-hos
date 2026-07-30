@@ -57,8 +57,10 @@ class RulePack:
             inputs_hash: SHA-256 digest of the canonical inputs (ADR-003).
             weekly_duty_seconds: Pre-computed rolling weekly duty seconds
                 from the last 7 or 8 days (passed in from repository layer).
-            as_of: Point-in-time for replay evaluation.  When set, the
-                timeline is truncated and a synthetic close event is added.
+            as_of: Point-in-time for replay evaluation.  When omitted,
+                uses the current UTC time.  In both cases the open HOS
+                segment is closed to this instant so live sweeps credit
+                ongoing driving/duty time.
 
         Returns:
             ComplianceResult with remaining times and any violations.
@@ -69,7 +71,10 @@ class RulePack:
         else:
             now = now.astimezone(timezone.utc)
 
-        eval_timeline = truncate_timeline_to(timeline, now) if as_of is not None else timeline
+        # Always close the open segment to ``now``.  Without this, the
+        # last status change has duration_seconds=0 and live sweeps miss
+        # active driving / duty / break violations.
+        eval_timeline = truncate_timeline_to(timeline, now)
 
         logger.debug(
             "Evaluating rule pack %s for driver %s (%d events, as_of=%s)",
