@@ -56,6 +56,9 @@ def _parse_alert_event(message_data: str) -> Optional[ComplianceAlert]:
                 violation.get("detected_at", datetime.now(timezone.utc).isoformat())
             ),
             overage_seconds=violation.get("overage_seconds", 0.0),
+            driver_phone=payload.get("driver_phone") or None,
+            dispatcher_phone=payload.get("dispatcher_phone") or None,
+            driver_name=payload.get("driver_name") or None,
         )
     except (KeyError, ValueError, json.JSONDecodeError) as exc:
         logger.error("Failed to parse alert event: %s — %s", message_data[:200], exc)
@@ -66,6 +69,24 @@ async def _dispatch_alert(alert: ComplianceAlert) -> None:
     """Apply suppression check then dispatch voice + SMS."""
     alert = _resolve_phones(alert)
     shift_id = datetime.now(timezone.utc).strftime("%Y%m%d")
+
+    # Never take the 12h alert lock when no delivery target exists.
+    # Otherwise a phone-less event permanently suppresses later retries
+    # once phones/test overrides are configured.
+    if not alert.driver_phone and not alert.dispatcher_phone:
+        log_alert_event(
+            alert,
+            suppressed=True,
+            dispatch_action="missing_phone",
+            suppression_reason="No driver or dispatcher phone available",
+        )
+        logger.warning(
+            "Skipping alert dispatch (no phone): driver=%s rule=%s stage=%s",
+            alert.driver_id,
+            alert.violation_type,
+            alert.severity.value,
+        )
+        return
 
     suppressed, reason = await should_suppress_alert(
         tenant_id=alert.tenant_id,
