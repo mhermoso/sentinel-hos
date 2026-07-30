@@ -36,21 +36,25 @@ QUALIFYING_OFF_DUTY_SECONDS: float = 10 * 3600.0
 # Qualifying 34-hour restart
 RESTART_SECONDS: float = 34 * 3600.0
 
-# Off-duty statuses that count toward rest (OFF or SB)
-_REST_STATUSES = {CanonicalDutyStatus.OFF_DUTY, CanonicalDutyStatus.SLEEPER_BERTH}
+# Off-duty statuses that count toward qualifying rest (OFF, SB, or PC).
+# Personal Conveyance is off-duty under FMCSA and must not break a rest streak.
+_REST_STATUSES = {
+    CanonicalDutyStatus.OFF_DUTY,
+    CanonicalDutyStatus.SLEEPER_BERTH,
+    CanonicalDutyStatus.PERSONAL_CONVEYANCE,
+}
 
-# On-duty statuses that count against the 14h window and weekly cycle
+# On-duty statuses that count against the 14h window and weekly cycle.
+# Yard Move is on-duty not driving — it belongs here, not in driving.
 _DUTY_STATUSES = {
     CanonicalDutyStatus.ON_DUTY,
     CanonicalDutyStatus.DRIVING,
     CanonicalDutyStatus.YARD_MOVE,
-    CanonicalDutyStatus.ON_DUTY,
 }
 
 # Statuses that count as driving for the 11h and 30-min break rules
 _DRIVING_STATUSES = {
     CanonicalDutyStatus.DRIVING,
-    CanonicalDutyStatus.YARD_MOVE,
 }
 
 
@@ -92,7 +96,8 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
     """Process driver timeline and return computed intermediate state.
 
     Handles:
-    - 10-consecutive-hour off-duty qualifying rest detection
+    - 10-consecutive-hour off-duty qualifying rest detection (OFF/SB/PC)
+    - Mid-shift bootstrap when lookback omits the prior qualifying rest
     - 34-hour restart detection
     - Split sleeper berth pairing (2h + 8h or 8h + 2h)
     - Per-shift accumulation of driving, duty, and break counters
@@ -138,6 +143,15 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
                 # Check for 34h restart
                 if consecutive_rest_seconds >= RESTART_SECONDS:
                     result.had_34h_restart = True
+            elif result.current_shift is None:
+                # Timeline began mid-shift, or rest was < 10h so clocks did not
+                # reset. Still open a shift so driving/duty accumulate; otherwise
+                # truncated lookbacks and short rests report full remaining time.
+                result.current_shift = ShiftWindow(
+                    shift_start=event.timestamp,
+                    qualifying_rest_before=consecutive_rest_start or event.timestamp,
+                )
+                in_shift = True
 
             consecutive_rest_start = None
             consecutive_rest_seconds = 0.0
@@ -155,7 +169,13 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
                 result.driving_since_break_seconds += duration
 
         # ── 30-min break reset ────────────────────────────────────────
-        if is_rest and duration >= 1800.0 and result.current_shift is not None:
+        # Any non-driving period ≥ 30 min satisfies § 395.3(a)(3)(ii)
+        # (OFF/SB/PC and on-duty-not-driving / yard move).
+        if (
+            not is_driving
+            and duration >= 1800.0
+            and result.current_shift is not None
+        ):
             result.current_shift.driving_since_break_seconds = 0.0
             result.driving_since_break_seconds = 0.0
 
