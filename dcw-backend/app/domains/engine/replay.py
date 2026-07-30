@@ -77,27 +77,37 @@ def compute_weekly_duty_seconds(
     as_of: datetime,
     cycle_days: int = 8,
 ) -> float:
-    """Sum on-duty seconds in the rolling weekly window ending at ``as_of``."""
+    """Sum on-duty seconds in the rolling weekly window ending at ``as_of``.
+
+    Uses the full status timeline so OFF/SB events close duty segments.
+    Passing only duty-status rows would treat gaps between duty starts as
+    on-duty time and badly over-count the 60/70h cycle.
+    """
     if as_of.tzinfo is None:
         as_of = as_of.replace(tzinfo=timezone.utc)
     else:
         as_of = as_of.astimezone(timezone.utc)
 
     cutoff = as_of - timedelta(days=cycle_days)
-    duty_events = sorted(
-        [e for e in events if e.timestamp >= cutoff and e.timestamp <= as_of and e.status in _DUTY_STATUSES],
+    window_events = sorted(
+        [
+            e
+            for e in events
+            if e.timestamp >= cutoff
+            and e.timestamp <= as_of
+            and e.status != CanonicalDutyStatus.UNKNOWN.value
+        ],
         key=lambda e: e.timestamp,
     )
 
-    if not duty_events:
+    if not window_events:
         return 0.0
 
     total_seconds = 0.0
-    for i, event in enumerate(duty_events):
-        if i + 1 < len(duty_events):
-            delta = duty_events[i + 1].timestamp - event.timestamp
-        else:
-            delta = as_of - event.timestamp
-        total_seconds += max(0.0, delta.total_seconds())
+    for i, event in enumerate(window_events):
+        if event.status not in _DUTY_STATUSES:
+            continue
+        end = window_events[i + 1].timestamp if i + 1 < len(window_events) else as_of
+        total_seconds += max(0.0, (end - event.timestamp).total_seconds())
 
     return total_seconds

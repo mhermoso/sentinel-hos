@@ -85,6 +85,8 @@ class EngineRepository:
         now = as_of if as_of is not None else datetime.now(timezone.utc)
         cutoff = now - timedelta(days=cycle_days)
 
+        # Fetch the full status timeline (including OFF/SB).  Duty-only
+        # rows omit segment ends and cause weekly hours to over-count.
         stmt = (
             select(CanonicalHOSLogRecord)
             .where(
@@ -92,12 +94,8 @@ class EngineRepository:
                 CanonicalHOSLogRecord.driver_id == driver_id,
                 CanonicalHOSLogRecord.event_timestamp >= cutoff,
                 CanonicalHOSLogRecord.event_timestamp <= now,
-                CanonicalHOSLogRecord.status.in_(
-                    [
-                        CanonicalDutyStatus.ON_DUTY.value,
-                        CanonicalDutyStatus.DRIVING.value,
-                        CanonicalDutyStatus.YARD_MOVE.value,
-                    ]
+                CanonicalHOSLogRecord.status.notin_(
+                    [CanonicalDutyStatus.UNKNOWN.value]
                 ),
             )
             .order_by(CanonicalHOSLogRecord.event_timestamp.asc())
