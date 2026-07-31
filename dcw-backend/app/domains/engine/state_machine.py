@@ -142,6 +142,10 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
                 result.duty_window_elapsed_seconds = 0.0
                 in_shift = True
 
+                # Restart validity is about the rest that just ended. Clear any prior
+                # invalid flag when a new shift opens; set it only if *this* rest was
+                # a ≥34h attempt that failed 1–5 AM validation.
+                result.invalid_restart_at_end = False
                 if consecutive_rest_seconds >= RESTART_SECONDS:
                     rest_start = consecutive_rest_start or event.timestamp
                     if is_valid_restart_period(

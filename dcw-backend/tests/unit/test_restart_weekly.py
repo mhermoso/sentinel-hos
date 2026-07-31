@@ -11,14 +11,18 @@ from zoneinfo import ZoneInfo
 
 from app.core.config import settings
 from app.core.security import compute_inputs_hash
+from app.domains.engine.calculators import check_restart
 from app.domains.engine.replay import (
+    RESTART_SECONDS,
     compute_weekly_duty_seconds,
     count_1_to_5_am_periods,
     find_restart_reset_point,
+    is_valid_restart_period,
     logs_to_timeline_events,
 )
 from app.domains.engine.rule_pack import RulePack
 from app.domains.engine.schemas import DriverTimeline, ViolationType
+from app.domains.engine.state_machine import run_state_machine
 from app.domains.ingestion.schemas import CanonicalDutyStatus, DCWCanonicalHOSLog
 
 UTC = timezone.utc
@@ -92,6 +96,64 @@ def test_restart_without_two_am_periods_no_reset() -> None:
     assert reset is None
     weekly = compute_weekly_duty_seconds(events, as_of=as_of, cycle_days=8, home_terminal_tz=CHICAGO)
     assert weekly == pytest.approx(25 * 3600.0)
+
+
+def test_in_progress_restart_credits_after_second_1_to_5_window() -> None:
+    """Still-resting drivers get weekly credit once rest spans two 1–5 AM periods.
+
+    Rest starting after 05:00 local is often invalid at exactly +34h (only one
+    1–5 AM window) but valid later while still OFF/SB. Weekly duty must reset
+    during that in-progress rest — not only after the next ON status.
+    """
+    # Mon 06:00 CDT = 11:00 UTC
+    rest_start = _ts(2026, 7, 13, 11)
+    at_34h = rest_start + timedelta(seconds=RESTART_SECONDS)
+    as_of = rest_start + timedelta(hours=48)  # Wed 06:00 CDT — two 1–5 AM windows
+
+    assert not is_valid_restart_period(rest_start, at_34h, home_terminal_tz=CHICAGO)
+    assert is_valid_restart_period(rest_start, as_of, home_terminal_tz=CHICAGO)
+
+    events = [
+        DriverTimeline.HOSEvent(
+            status=CanonicalDutyStatus.DRIVING.value,
+            timestamp=rest_start - timedelta(hours=70),
+        ),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=rest_start),
+    ]
+    reset = find_restart_reset_point(events, as_of, home_terminal_tz=CHICAGO)
+    assert reset is not None
+    weekly = compute_weekly_duty_seconds(
+        events,
+        as_of=as_of,
+        cycle_days=8,
+        home_terminal_tz=CHICAGO,
+    )
+    assert weekly == pytest.approx(0.0)
+
+
+def test_valid_restart_clears_prior_invalid_restart_flag() -> None:
+    """A later valid 34h restart must clear RESTART_INVALID from an earlier attempt."""
+    off_invalid = _ts(2026, 7, 21, 11)
+    on_after_invalid = off_invalid + timedelta(hours=34)
+    off_valid = on_after_invalid + timedelta(hours=2)
+    on_after_valid = off_valid + timedelta(hours=48)
+
+    assert count_1_to_5_am_periods(off_invalid, on_after_invalid, CHICAGO) == 1
+    assert is_valid_restart_period(off_valid, on_after_valid, home_terminal_tz=CHICAGO)
+
+    events = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(2026, 7, 20, 0)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=_ts(2026, 7, 20, 10)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=off_invalid),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.ON_DUTY.value, timestamp=on_after_invalid),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=off_valid),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.ON_DUTY.value, timestamp=on_after_valid),
+    ]
+    state = run_state_machine(DriverTimeline(driver_id="d1", tenant_id="t1", events=events))
+    assert state.had_34h_restart is True
+    assert state.invalid_restart_at_end is False
+    assert state.last_valid_restart_at == on_after_valid
+    assert check_restart(state, on_after_valid + timedelta(hours=1)) == []
 
 
 def test_rolling_window_after_restart_ages_out() -> None:

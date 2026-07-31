@@ -152,13 +152,22 @@ def _restart_reset_from_rest(
         restart_complete_at = rest_start + timedelta(seconds=RESTART_SECONDS)
         if boundary < restart_complete_at:
             return None
+        # Validate against the full rest so far (``boundary`` / as_of), not only the
+        # first 34h. Rest that starts after 05:00 local often needs a second 1–5 AM
+        # window that lands after hour 34; checking only +34h falsely withholds credit.
         if not is_valid_restart_period(
+            rest_start,
+            boundary,
+            home_terminal_tz=home_terminal_tz,
+        ):
+            return None
+        if is_valid_restart_period(
             rest_start,
             restart_complete_at,
             home_terminal_tz=home_terminal_tz,
         ):
-            return None
-        return restart_complete_at
+            return restart_complete_at
+        return boundary
 
     if not is_valid_restart_period(
         rest_start,
