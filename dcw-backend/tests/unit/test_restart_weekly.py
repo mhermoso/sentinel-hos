@@ -156,26 +156,65 @@ def test_valid_restart_clears_prior_invalid_restart_flag() -> None:
     assert check_restart(state, on_after_valid + timedelta(hours=1)) == []
 
 
-def test_rolling_window_after_restart_ages_out() -> None:
-    """Duty more than 8 days after a valid restart uses only the rolling window."""
-    restart_on = _ts(2026, 1, 1, 12)
-    duty_start = _ts(2026, 1, 4, 8)
+def test_invalid_restart_flag_set_when_latest_34h_rest_fails() -> None:
+    """RESTART_INVALID still fires when the most recent ≥34h rest fails validation."""
+    off_invalid = _ts(2026, 7, 21, 11)
+    on_after_invalid = off_invalid + timedelta(hours=34)
     events = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(2026, 7, 20, 0)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=_ts(2026, 7, 20, 10)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=off_invalid),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.ON_DUTY.value, timestamp=on_after_invalid),
+    ]
+    state = run_state_machine(DriverTimeline(driver_id="d1", tenant_id="t1", events=events))
+    assert state.invalid_restart_at_end is True
+    violations = check_restart(state, on_after_invalid + timedelta(hours=1))
+    assert len(violations) == 1
+    assert violations[0].violation_type == ViolationType.RESTART_INVALID
+
+
+def test_rolling_window_after_restart_ages_out() -> None:
+    """Duty older than cycle_days after a restart is excluded by the rolling window.
+
+    Inter-duty rests stay under 34h so a second restart does not mask the
+    rolling-window behavior under test.
+    """
+    restart_on = _ts(2026, 1, 1, 12)
+    as_of = restart_on + timedelta(days=10)  # 2026-01-11 12:00 UTC
+    late_drive = as_of - timedelta(hours=5)
+
+    events: list[DriverTimeline.HOSEvent] = [
         DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(2025, 12, 30, 0)),
         DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=restart_on),
         DriverTimeline.HOSEvent(
             status=CanonicalDutyStatus.OFF_DUTY.value,
             timestamp=restart_on + timedelta(hours=4),
         ),
-        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=duty_start),
+    ]
+    cursor = restart_on + timedelta(hours=4)
+    pulse_duty_seconds = 0.0
+    rolling_cutoff = as_of - timedelta(days=8)
+    while cursor + timedelta(hours=30) < late_drive:
+        on_at = cursor + timedelta(hours=30)
+        off_at = on_at + timedelta(seconds=1)
+        events.append(DriverTimeline.HOSEvent(status=CanonicalDutyStatus.ON_DUTY.value, timestamp=on_at))
+        events.append(DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=off_at))
+        if off_at > rolling_cutoff:
+            pulse_duty_seconds += 1.0
+        cursor = off_at
+
+    events.append(DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=late_drive))
+    events.append(
         DriverTimeline.HOSEvent(
             status=CanonicalDutyStatus.OFF_DUTY.value,
-            timestamp=duty_start + timedelta(hours=4),
-        ),
-    ]
-    as_of = restart_on + timedelta(days=10)
+            timestamp=late_drive + timedelta(hours=4),
+        )
+    )
+
     weekly = compute_weekly_duty_seconds(events, as_of=as_of, cycle_days=8, home_terminal_tz=CHICAGO)
-    assert weekly == pytest.approx(4 * 3600.0)
+    # Late 4h counts; early post-restart 4h (Jan 1) is before the 8-day cutoff.
+    assert weekly == pytest.approx(4 * 3600.0 + pulse_duty_seconds)
+    assert find_restart_reset_point(events, as_of, home_terminal_tz=CHICAGO) == restart_on
 
 
 @pytest.mark.skipif(not _DATA_PATH.exists(), reason="hos_10d_canonical.json not present")
