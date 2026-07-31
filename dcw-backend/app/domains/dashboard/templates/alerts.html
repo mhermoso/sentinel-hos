@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Alerts — Sentinel HOS{% endblock %}
+
+{% block head %}
+<script src="/static/alert_detail.js" defer></script>
+{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <h1>Alerts</h1>
+  <p class="lede">Fleet warnings, violations, and critical alerts from backtest + live audit.</p>
+</section>
+
+<section class="panel">
+  <form class="alerts-filters" method="get" action="/ui/alerts"
+        hx-get="/ui/alerts/partial"
+        hx-target="#alerts-table-body"
+        hx-trigger="change, submit"
+        hx-swap="innerHTML">
+    <label>
+      Severity
+      <select name="severity">
+        <option value="" {% if not severity %}selected{% endif %}>All</option>
+        <option value="WARNING" {% if severity == 'WARNING' %}selected{% endif %}>Warning</option>
+        <option value="VIOLATION" {% if severity == 'VIOLATION' %}selected{% endif %}>Violation</option>
+        <option value="CRITICAL" {% if severity == 'CRITICAL' %}selected{% endif %}>Alert</option>
+      </select>
+    </label>
+    <label>
+      Source
+      <select name="source">
+        <option value="" {% if not source %}selected{% endif %}>All</option>
+        <option value="backtest" {% if source == 'backtest' %}selected{% endif %}>Backtest</option>
+        <option value="live_audit" {% if source == 'live_audit' %}selected{% endif %}>Live</option>
+      </select>
+    </label>
+    <label>
+      From
+      <input type="date" name="from" value="{{ from_date or '' }}" />
+    </label>
+    <label>
+      To
+      <input type="date" name="to" value="{{ to_date or '' }}" />
+    </label>
+    <label>
+      Driver ID
+      <input type="text" name="driver_id" value="{{ driver_id or '' }}" placeholder="optional" />
+    </label>
+    <button type="submit" class="btn-sm">Apply</button>
+  </form>
+
+  <div class="panel-meta">
+    <span id="alerts-count">{{ alerts|length }} alerts</span>
+    <span>Display TZ: {{ timezone }}{% if tz_abbrev %} ({{ tz_abbrev }}){% endif %}</span>
+  </div>
+
+  <table class="alerts-table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Driver</th>
+        <th>Type</th>
+        <th>Severity</th>
+        <th>Source</th>
+        <th>Description</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="alerts-table-body">
+      {% include "partials/alert_rows.html" %}
+    </tbody>
+  </table>
+</section>
+
+<div id="alert-drawer" class="alert-drawer" aria-hidden="true">
+  <div class="alert-drawer-backdrop" onclick="window.AlertDetail && window.AlertDetail.close()"></div>
+  <aside class="alert-drawer-panel" role="dialog" aria-label="Alert calculation details">
+    <div id="alert-drawer-body">
+      <p class="muted" style="padding:1.5rem">Select an alert row to see calculation details.</p>
+    </div>
+  </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.body.addEventListener("htmx:afterSwap", (ev) => {
+    const target = ev.target;
+    if (!target) return;
+    if (target.id === "alerts-table-body") {
+      window.AlertDetail && window.AlertDetail.bindMarkerButtons(target);
+      const count = target.querySelectorAll("tr[data-alert-open]").length;
+      const el = document.getElementById("alerts-count");
+      if (el) el.textContent = count + " alerts";
+    }
+    if (target.id === "alert-drawer-body") {
+      window.AlertDetail && window.AlertDetail.mount(target);
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") window.AlertDetail && window.AlertDetail.close();
+  });
+  window.AlertDetail && window.AlertDetail.bindMarkerButtons();
+</script>
+{% endblock %}

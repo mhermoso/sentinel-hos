@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Home — Sentinel HOS{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="/static/home_map.js" defer></script>
+{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <h1>Home</h1>
+  <p class="lede">Fleet map, last-30-day alert summary, and recent notification dispatches.</p>
+</section>
+
+<section class="home-summary">
+  <a class="summary-card warn" href="/ui/alerts?severity=WARNING&amp;from={{ from_date }}&amp;to={{ to_date }}">
+    <span class="summary-label">Warnings</span>
+    <span class="summary-value">{{ warning_count }}</span>
+    <span class="summary-meta">Last 30 days · open Alerts</span>
+  </a>
+  <a class="summary-card viol" href="/ui/alerts?severity=VIOLATION&amp;from={{ from_date }}&amp;to={{ to_date }}">
+    <span class="summary-label">Violations</span>
+    <span class="summary-value">{{ violation_count }}</span>
+    <span class="summary-meta">Last 30 days · open Alerts</span>
+  </a>
+</section>
+
+<section class="panel">
+  <div class="panel-meta">
+    <span>{{ positions|length }} drivers with location</span>
+    <span>{{ no_location|length }} without coordinates</span>
+  </div>
+  <div id="home-map" class="home-map" role="img" aria-label="Driver locations map"
+       data-positions='{{ positions_json | tojson }}'></div>
+  {% if no_location %}
+  <div class="no-location">
+    <h2>No location</h2>
+    <ul>
+      {% for d in no_location %}
+      <li>
+        <a href="/ui/drivers/{{ d.driver_id }}?date={{ today }}">{{ d.driver_name or d.driver_id }}</a>
+        <span class="muted mono">{{ d.driver_id }}</span>
+        {% if d.current_status %}<span class="badge hist">{{ d.current_status }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-meta">
+    <span>Latest notifications</span>
+    <span class="hint">From alert JSONL log · no live Twilio calls</span>
+  </div>
+  <table class="alerts-table dispatch-table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Driver</th>
+        <th>Severity</th>
+        <th>Channel</th>
+        <th>Action</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if dispatch_events %}
+      {% for e in dispatch_events %}
+      <tr>
+        <td class="mono">{{ e.timestamp or '—' }}</td>
+        <td>
+          <strong>{{ e.driver_name or e.driver_id }}</strong>
+          <div class="muted small">{{ e.driver_id }}</div>
+        </td>
+        <td><span class="sev sev-{{ e.severity }}">{{ e.severity or '—' }}</span></td>
+        <td class="mono">{{ e.channel }}</td>
+        <td class="mono">{{ e.dispatch_action }}</td>
+        <td class="desc">{{ e.description }}</td>
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr>
+        <td colspan="6" class="muted">No dispatch log entries yet.</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.HomeMap && window.HomeMap.mount();
+</script>
+{% endblock %}

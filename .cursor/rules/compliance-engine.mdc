@@ -1,0 +1,34 @@
+---
+description: Deterministic compliance engine and rule pack rules
+globs: dcw-backend/app/domains/engine/**/*
+alwaysApply: false
+---
+
+# Compliance Engine (ADR-004)
+
+## Determinism Requirements
+
+- **100% deterministic** — pure state-machine logic, no probabilistic or LLM scoring
+- Target evaluation latency: <20 ms per driver timeline
+- Every audit record must bind `inputs_hash` + `rule_pack_version`
+- Default rule pack: `fmcsa-us-property@1.2.0` (SemVer: `fmcsa-us-property@MAJOR.MINOR.PATCH`)
+
+## Rule Pack Structure
+
+Orchestrate evaluation through `RulePack.evaluate()` in `rule_pack.py`. Calculators:
+
+1. **11-Hour Driving Limit** — countdown after 10 consecutive hours off-duty
+2. **14-Hour Duty Window** — continuous elapsed shift window
+3. **30-Minute Rest Break** — after 8 cumulative driving hours without 30-min rest
+4. **60/70-Hour Weekly Cycle** — rolling 7- or 8-day duty aggregation
+5. **34-Hour Restart & Split Sleeper** — cycle reset and 14h clock pause
+
+## Sweeper & Alerting
+
+- Sweeper scans `set:active_drivers` in Redis, evaluates timelines, persists audit records
+- On violation: publish to Redis channel `compliance_alerts`
+- Notifier handles alert lock suppression (`alert_lock:{tenant}:{driver}:{shift}:{rule}:{stage}`)
+
+## Testing Requirement
+
+Any change to `app/domains/engine/` **must** include unit tests covering edge conditions. Golden fixtures in `tests/fixtures/golden/` (versioned with rule pack) are the primary contract.

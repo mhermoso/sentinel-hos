@@ -1,0 +1,486 @@
+"""Build a display-timezone day view of HOS status for the dashboard UI.
+
+Day boundaries use the caller's display timezone (default ``America/Chicago``).
+
+Geotab DutyStatusLog includes non-status events (``MotionStopped``, ``Certify``,
+``DrivingWhileInExemption``, etc.) that our mapper stores as ``UNKNOWN``, plus
+ignored / inactive records (``isIgnored`` / ``eventRecordStatus`` 2–4). Those
+must **not** interrupt the duty line — MyGeotab keeps the previous OFF/SB/D/ON/PC/YM
+status. This builder skips them when building the timeline so durations match
+Geotab totals.
+
+PC plots on the OFF lane (striped); YM plots on the ON lane (striped).
+
+Distance uses odometer deltas on DutyStatusLog. The persisted field
+``odometer_km`` holds **meters** (Geotab units; legacy field name).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from zoneinfo import ZoneInfo
+
+from app.core.config import settings
+from app.domains.ingestion.duty_filter import should_skip_duty_status_change
+
+logger = logging.getLogger("dcw.dashboard.day_builder")
+
+# Duty lanes (+ UNKNOWN only if carry-in has no other status). Totals sum these.
+GRID_STATUSES: Tuple[str, ...] = ("OFF", "SB", "D", "ON", "UNKNOWN")
+EXEMPTION_STATUSES: Tuple[str, ...] = ("PC", "YM")
+# Status → Y-lane for the Geotab-style grid (PC→OFF, YM→ON)
+LANE_FOR_STATUS: Dict[str, str] = {
+    "OFF": "OFF",
+    "SB": "SB",
+    "D": "D",
+    "ON": "ON",
+    "UNKNOWN": "UNKNOWN",
+    "PC": "OFF",
+    "YM": "ON",
+}
+PLOT_STATUSES = frozenset(LANE_FOR_STATUS)
+METERS_PER_MILE = 1609.344
+_BACKEND_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_BACKTEST_DISPATCHES_PATH = _BACKEND_ROOT / "data" / "backtest_dispatches.json"
+
+
+@dataclass(frozen=True)
+class DayBounds:
+    """UTC window for a local calendar day."""
+
+    local_date: date
+    timezone: str
+    start_utc: datetime
+    end_utc: datetime
+
+
+@dataclass(frozen=True)
+class RawHOSEvent:
+    """Minimal event fields needed for day construction."""
+
+    status: str
+    event_timestamp: datetime
+    raw_id: str = ""
+    device_id: Optional[str] = None
+    annotation: Optional[str] = None
+    # Geotab odometer in meters (stored historically as odometer_km)
+    odometer_m: Optional[float] = None
+    raw_payload: Optional[Mapping[str, Any]] = field(default=None, hash=False)
+
+
+def home_terminal_tz() -> ZoneInfo:
+    return ZoneInfo(settings.DEFAULT_HOME_TERMINAL_TIMEZONE)
+
+
+def chicago_day_bounds(local_date: date, tz: Optional[ZoneInfo] = None) -> DayBounds:
+    """Convert a local calendar date to a half-open UTC window ``[00:00, 24:00)``."""
+    zone = tz or home_terminal_tz()
+    start_local = datetime(local_date.year, local_date.month, local_date.day, tzinfo=zone)
+    end_local = start_local + timedelta(days=1)
+    return DayBounds(
+        local_date=local_date,
+        timezone=str(zone),
+        start_utc=start_local.astimezone(timezone.utc),
+        end_utc=end_local.astimezone(timezone.utc),
+    )
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def format_duration_hhmm(seconds: float) -> str:
+    total = max(0, int(round(seconds)))
+    hours, rem = divmod(total, 3600)
+    minutes = rem // 60
+    return f"{hours:02d}:{minutes:02d}"
+
+
+def format_distance_mi(meters: float) -> str:
+    miles = max(0.0, meters) / METERS_PER_MILE
+    return f"{miles:.1f} mi"
+
+
+def format_distance_km(meters: float) -> str:
+    return f"{max(0.0, meters) / 1000.0:.1f} km"
+
+
+def _is_non_duty(event: RawHOSEvent) -> bool:
+    return should_skip_duty_status_change(event.status, event.raw_payload)
+
+
+def compute_status_totals(
+    points: Sequence[Tuple[datetime, str, Optional[float]]],
+    day_end: datetime,
+) -> Dict[str, float]:
+    """Accumulate seconds and odometer meters per GRID status until day_end.
+
+    Each point is ``(timestamp, status, odometer_m_at_start)``. Distance for a
+    segment is ``max(0, odo_next - odo_curr)`` when both ends have odometer.
+
+    PC folds into OFF (and ``exemption_pc_*``); YM folds into ON
+    (and ``exemption_ym_*``).
+    """
+    totals = {status: 0.0 for status in GRID_STATUSES}
+    totals["exemption_pc_seconds"] = 0.0
+    totals["exemption_ym_seconds"] = 0.0
+    for key in (
+        "distance_m",
+        "OFF_m",
+        "SB_m",
+        "D_m",
+        "ON_m",
+        "UNKNOWN_m",
+        "exemption_pc_m",
+        "exemption_ym_m",
+    ):
+        totals[key] = 0.0
+    if not points:
+        return totals
+
+    for idx, (ts, status, odo) in enumerate(points):
+        next_ts = points[idx + 1][0] if idx + 1 < len(points) else day_end
+        next_odo = points[idx + 1][2] if idx + 1 < len(points) else None
+        if next_ts <= ts:
+            continue
+        duration = (next_ts - ts).total_seconds()
+        dist = 0.0
+        if odo is not None and next_odo is not None and next_odo >= odo:
+            dist = next_odo - odo
+
+        if status == "PC":
+            totals["OFF"] += duration
+            totals["exemption_pc_seconds"] += duration
+            totals["OFF_m"] += dist
+            totals["exemption_pc_m"] += dist
+        elif status == "YM":
+            totals["ON"] += duration
+            totals["exemption_ym_seconds"] += duration
+            totals["ON_m"] += dist
+            totals["exemption_ym_m"] += dist
+        elif status in GRID_STATUSES:
+            totals[status] += duration
+            totals[f"{status}_m"] += dist
+        totals["distance_m"] += dist
+    return totals
+
+
+def build_day_points(
+    events: Sequence[RawHOSEvent],
+    bounds: DayBounds,
+) -> Tuple[List[Dict[str, Any]], Dict[str, float], Optional[str]]:
+    """Build clipped day status points with carry-forward and duration totals.
+
+    Returns ``(grid_events, totals_seconds, carry_forward_status)``.
+
+    UNKNOWN / ignored / inactive Geotab logs do not interrupt the previous duty
+    status — matching MyGeotab. PC/YM use lanes OFF/ON for stripes.
+    """
+    start = bounds.start_utc
+    end = bounds.end_utc
+
+    sorted_events = sorted(events, key=lambda e: _ensure_utc(e.event_timestamp))
+    carry_any: Optional[str] = None
+    carry_duty: Optional[str] = None
+    carry_odo: Optional[float] = None
+    day_events: List[RawHOSEvent] = []
+
+    for event in sorted_events:
+        ts = _ensure_utc(event.event_timestamp)
+        if ts < start:
+            carry_any = event.status
+            if not _is_non_duty(event):
+                carry_duty = event.status
+                if event.odometer_m is not None:
+                    carry_odo = event.odometer_m
+        elif ts < end:
+            day_events.append(event)
+
+    # Prefer last real duty status before the day (skip trailing UNKNOWN noise)
+    carry = carry_duty if carry_duty is not None else carry_any
+
+    # Timeline: (ts, status, odometer_m at this point)
+    timeline: List[Tuple[datetime, str, Optional[float]]] = []
+    if carry is not None:
+        timeline.append((start, carry, carry_odo))
+    for event in day_events:
+        if _is_non_duty(event):
+            continue
+        ts = _ensure_utc(event.event_timestamp)
+        odo = event.odometer_m
+        if timeline and timeline[-1][0] == ts:
+            timeline[-1] = (ts, event.status, odo if odo is not None else timeline[-1][2])
+        else:
+            # Prefer event odometer; else carry last known
+            if odo is None and timeline:
+                odo = timeline[-1][2]
+            timeline.append((ts, event.status, odo))
+
+    totals = compute_status_totals(timeline, end)
+
+    grid_events: List[Dict[str, Any]] = []
+    for idx, (ts, status, odo) in enumerate(timeline):
+        next_ts = timeline[idx + 1][0] if idx + 1 < len(timeline) else end
+        next_odo = timeline[idx + 1][2] if idx + 1 < len(timeline) else None
+        duration = max(0.0, (next_ts - ts).total_seconds())
+        dist_m = 0.0
+        if odo is not None and next_odo is not None and next_odo >= odo:
+            dist_m = next_odo - odo
+        lane = LANE_FOR_STATUS.get(status)
+        if lane is None:
+            continue
+        local_ts = ts.astimezone(ZoneInfo(bounds.timezone))
+        local_end = next_ts.astimezone(ZoneInfo(bounds.timezone))
+        hour_of_day = (
+            local_ts.hour
+            + local_ts.minute / 60.0
+            + local_ts.second / 3600.0
+            + local_ts.microsecond / 3_600_000_000.0
+        )
+        grid_events.append(
+            {
+                "status": status,
+                "lane": lane,
+                "event_timestamp": ts,
+                "local_timestamp": local_ts.isoformat(),
+                "local_end_timestamp": local_end.isoformat(),
+                "hour_of_day": hour_of_day,
+                "duration_seconds": duration,
+                "duration_hhmm": format_duration_hhmm(duration),
+                "distance_m": dist_m,
+                "distance_mi": round(dist_m / METERS_PER_MILE, 2),
+                "distance_km": round(dist_m / 1000.0, 2),
+                "distance_label": format_distance_mi(dist_m) if dist_m > 0 else "",
+            }
+        )
+
+    return grid_events, totals, carry
+
+
+def load_backtest_dispatches(
+    path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """Load would-dispatch markers written by ``scripts/backtest_alerts.py``."""
+    dispatch_path = path or DEFAULT_BACKTEST_DISPATCHES_PATH
+    if not dispatch_path.exists():
+        return []
+    try:
+        with dispatch_path.open(encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to load backtest dispatches from %s: %s", dispatch_path, exc)
+        return []
+    rows = payload.get("dispatches") or payload.get("dispatch_events") or []
+    return list(rows) if isinstance(rows, list) else []
+
+
+def _parse_iso_dt(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _ensure_utc(value)
+    if not isinstance(value, str):
+        return None
+    text = value.replace("Z", "+00:00")
+    try:
+        return _ensure_utc(datetime.fromisoformat(text))
+    except ValueError:
+        return None
+
+
+def filter_backtest_markers(
+    dispatches: Iterable[Dict[str, Any]],
+    driver_id: str,
+    start_utc: datetime,
+    end_utc: datetime,
+) -> List[Dict[str, Any]]:
+    markers: List[Dict[str, Any]] = []
+    for row in dispatches:
+        if str(row.get("driver_id", "")) != driver_id:
+            continue
+        as_of = _parse_iso_dt(row.get("as_of"))
+        if as_of is None or as_of < start_utc or as_of >= end_utc:
+            continue
+        markers.append(
+            {
+                "as_of": as_of,
+                "violation_type": str(row.get("violation_type", "")),
+                "severity": str(row.get("severity", "")),
+                "rule_ref": str(row.get("rule_ref", "")),
+                "description": str(row.get("description", "")),
+                "source": "backtest",
+                "driver_id": driver_id,
+                "driver_name": row.get("driver_name"),
+            }
+        )
+    return markers
+
+
+def markers_from_audit_violations(
+    violations: Iterable[Dict[str, Any]],
+    start_utc: datetime,
+    end_utc: datetime,
+    *,
+    driver_id: str = "",
+) -> List[Dict[str, Any]]:
+    """Build live markers, collapsing sweeper duplicates of the same rule/severity."""
+    markers: List[Dict[str, Any]] = []
+    for violation in violations:
+        detected = _parse_iso_dt(violation.get("detected_at"))
+        if detected is None or detected < start_utc or detected >= end_utc:
+            continue
+        markers.append(
+            {
+                "as_of": detected,
+                "violation_type": str(violation.get("violation_type", "")),
+                "severity": str(violation.get("severity", "")),
+                "rule_ref": str(violation.get("rule_ref", "")),
+                "description": str(violation.get("description", "")),
+                "source": "live_audit",
+                "driver_id": driver_id or str(violation.get("driver_id", "")),
+                "driver_name": violation.get("driver_name"),
+            }
+        )
+    # Keep first occurrence per (type, severity) for the day — sweeper re-publishes often
+    markers.sort(key=lambda m: _ensure_utc(m["as_of"]))
+    collapsed: List[Dict[str, Any]] = []
+    seen_rule: set[Tuple[str, str]] = set()
+    for marker in markers:
+        key = (str(marker["violation_type"]), str(marker["severity"]))
+        if key in seen_rule:
+            continue
+        seen_rule.add(key)
+        collapsed.append(marker)
+    return collapsed
+
+
+def merge_alert_markers(
+    *marker_groups: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Deduplicate markers by (type, severity, source, minute bucket) and sort."""
+    seen: set[Tuple[str, str, str, str]] = set()
+    merged: List[Dict[str, Any]] = []
+    for group in marker_groups:
+        for marker in group:
+            as_of = _ensure_utc(marker["as_of"])
+            minute_bucket = as_of.replace(second=0, microsecond=0).isoformat()
+            key = (
+                minute_bucket,
+                str(marker.get("violation_type", "")),
+                str(marker.get("severity", "")),
+                str(marker.get("source", "")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(marker)
+    merged.sort(key=lambda m: _ensure_utc(m["as_of"]))
+    return merged
+
+
+def annotate_marker_hours(
+    markers: Sequence[Dict[str, Any]],
+    tz_name: str,
+) -> List[Dict[str, Any]]:
+    zone = ZoneInfo(tz_name)
+    annotated: List[Dict[str, Any]] = []
+    for marker in markers:
+        as_of = _ensure_utc(marker["as_of"])
+        local_ts = as_of.astimezone(zone)
+        hour_of_day = (
+            local_ts.hour
+            + local_ts.minute / 60.0
+            + local_ts.second / 3600.0
+        )
+        annotated.append(
+            {
+                **marker,
+                "as_of": as_of,
+                "local_timestamp": local_ts.isoformat(),
+                "hour_of_day": hour_of_day,
+            }
+        )
+    return annotated
+
+
+def collect_fleet_alerts(
+    dispatches: Iterable[Dict[str, Any]],
+    live_markers: Iterable[Dict[str, Any]],
+    *,
+    severity: Optional[str] = None,
+    driver_id: Optional[str] = None,
+    source: Optional[str] = None,
+    start_utc: Optional[datetime] = None,
+    end_utc: Optional[datetime] = None,
+) -> List[Dict[str, Any]]:
+    """Merge backtest + live markers for the fleet Alerts tab / API."""
+    backtest_rows: List[Dict[str, Any]] = []
+    for row in dispatches:
+        as_of = _parse_iso_dt(row.get("as_of"))
+        if as_of is None:
+            continue
+        if start_utc is not None and as_of < start_utc:
+            continue
+        if end_utc is not None and as_of >= end_utc:
+            continue
+        did = str(row.get("driver_id", ""))
+        if driver_id and did != driver_id:
+            continue
+        backtest_rows.append(
+            {
+                "as_of": as_of,
+                "violation_type": str(row.get("violation_type", "")),
+                "severity": str(row.get("severity", "")),
+                "rule_ref": str(row.get("rule_ref", "")),
+                "description": str(row.get("description", "")),
+                "source": "backtest",
+                "driver_id": did,
+                "driver_name": row.get("driver_name"),
+            }
+        )
+
+    live_rows: List[Dict[str, Any]] = []
+    for marker in live_markers:
+        as_of = _parse_iso_dt(marker.get("as_of") or marker.get("detected_at"))
+        if as_of is None:
+            continue
+        if start_utc is not None and as_of < start_utc:
+            continue
+        if end_utc is not None and as_of >= end_utc:
+            continue
+        did = str(marker.get("driver_id", ""))
+        if driver_id and did != driver_id:
+            continue
+        live_rows.append(
+            {
+                "as_of": as_of,
+                "violation_type": str(marker.get("violation_type", "")),
+                "severity": str(marker.get("severity", "")),
+                "rule_ref": str(marker.get("rule_ref", "")),
+                "description": str(marker.get("description", "")),
+                "source": str(marker.get("source", "live_audit")),
+                "driver_id": did,
+                "driver_name": marker.get("driver_name"),
+            }
+        )
+
+    merged = merge_alert_markers(backtest_rows, live_rows)
+    sev_filter = (severity or "").strip()
+    if sev_filter and sev_filter.lower() != "all":
+        sev = sev_filter.upper()
+        # Legacy UI label "Alert" mapped to CRITICAL
+        if sev == "ALERT":
+            sev = "CRITICAL"
+        merged = [m for m in merged if str(m.get("severity", "")).upper() == sev]
+    src_filter = (source or "").strip()
+    if src_filter and src_filter.lower() != "all":
+        src = src_filter.lower()
+        merged = [m for m in merged if str(m.get("source", "")).lower() == src]
+    return merged

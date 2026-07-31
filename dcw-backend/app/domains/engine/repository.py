@@ -17,6 +17,7 @@ from app.domains.engine.replay import (
     compute_weekly_duty_seconds,
 )
 from app.domains.engine.schemas import ComplianceResult, DriverTimeline
+from app.domains.ingestion.duty_filter import should_skip_duty_status_change
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.schemas import CanonicalDutyStatus
 
@@ -69,6 +70,10 @@ class EngineRepository:
                 timestamp=rec.event_timestamp,
             )
             for rec in records
+            if not should_skip_duty_status_change(
+                rec.status,
+                rec.raw_payload if isinstance(rec.raw_payload, dict) else None,
+            )
         ]
 
         return DriverTimeline(
@@ -112,6 +117,10 @@ class EngineRepository:
                 timestamp=rec.event_timestamp,
             )
             for rec in records
+            if not should_skip_duty_status_change(
+                rec.status,
+                rec.raw_payload if isinstance(rec.raw_payload, dict) else None,
+            )
         ]
         return compute_weekly_duty_seconds(events, cycle_days=cycle_days, as_of=now)
 

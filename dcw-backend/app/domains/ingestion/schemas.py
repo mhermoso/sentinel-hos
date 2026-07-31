@@ -47,7 +47,11 @@ class DCWCanonicalHOSLog(BaseModel):
     device_id: Optional[str] = Field(None, description="Assigned vehicle device ID")
     latitude: Optional[float] = Field(None, ge=-90.0, le=90.0)
     longitude: Optional[float] = Field(None, ge=-180.0, le=180.0)
-    odometer_km: Optional[float] = Field(None, ge=0.0)
+    odometer_km: Optional[float] = Field(
+        None,
+        ge=0.0,
+        description="Vehicle odometer in meters (Geotab). Field name is legacy.",
+    )
     annotation: Optional[str] = Field(None, max_length=500)
     raw_payload: Dict[str, Any] = Field(
         ..., description="Sanitised snapshot of original provider JSON payload"

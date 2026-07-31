@@ -10,17 +10,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import close_db, init_db
 from app.core.redis import close_redis, init_redis
 from app.domains.dashboard.router import router as dashboard_router
+from app.domains.dashboard.ui import ui_router
 from app.domains.notifier.subscriber import run_subscriber_loop
 
 logger = logging.getLogger("dcw.main")
+
+_DASHBOARD_STATIC = Path(__file__).resolve().parent / "domains" / "dashboard" / "static"
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -44,9 +49,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Routers ───────────────────────────────────────────────────────────────
+# ── Static + Routers ──────────────────────────────────────────────────────
 
+app.mount("/static", StaticFiles(directory=str(_DASHBOARD_STATIC)), name="static")
 app.include_router(dashboard_router)
+app.include_router(ui_router)
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────
 

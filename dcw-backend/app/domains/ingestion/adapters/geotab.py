@@ -31,13 +31,31 @@ def _map_geotab_status(
 ) -> CanonicalDutyStatus:
     """Map Geotab status + origin strings to canonical duty status.
 
-    Geotab status strings: "Driving", "Off", "SleeperBerth", "On"
-    Special origins: "YardMove", "PersonalConveyance"
+    Geotab status strings: ``Driving``, ``Off``, ``SleeperBerth``, ``On``,
+    plus exemption statuses ``PC`` / ``YM`` / ``INT_PC`` (modern BBB feeds).
+    Origin fallback: ``YardMove``, ``PersonalConveyance``.
+
+    Motion-only exemption events (``DrivingWhileInExemption``, etc.) stay
+    ``UNKNOWN`` — they are not duty-status changes.
     """
+    # Status-based exemptions (modern Geotab / BBB Bros)
+    if status_str in (
+        "PC",
+        "INT_PC",
+        "PersonalConveyance",
+        "EnginePowerupPC",
+        "EngineShutdownPC",
+    ):
+        return CanonicalDutyStatus.PERSONAL_CONVEYANCE
+    if status_str in ("YM", "YardMove", "INT_YM"):
+        return CanonicalDutyStatus.YARD_MOVE
+
+    # Origin-based fallback (legacy Geotab)
     if origin == "YardMove":
         return CanonicalDutyStatus.YARD_MOVE
     if origin == "PersonalConveyance":
         return CanonicalDutyStatus.PERSONAL_CONVEYANCE
+
     if status_str in ("Driving", "D", "INT_D"):
         return CanonicalDutyStatus.DRIVING
     if status_str in ("Off", "OFF"):
@@ -117,7 +135,8 @@ def map_geotab_log_to_canonical(
     if comment and isinstance(comment, str):
         annotation = comment.strip()[:500]
 
-    # Odometer extraction
+    # Odometer: Geotab DutyStatusLog.odometer is meters. Stored in the
+    # legacy column/field ``odometer_km`` (name is historical; value is meters).
     odometer: Optional[float] = None
     if "odometer" in raw_log and isinstance(raw_log["odometer"], (int, float)):
         odometer = float(raw_log["odometer"])

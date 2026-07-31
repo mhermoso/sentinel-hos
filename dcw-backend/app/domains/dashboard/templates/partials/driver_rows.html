@@ -1,0 +1,30 @@
+{% for d in drivers %}
+<tr>
+  <td>
+    <a class="driver-link" href="/ui/drivers/{{ d.driver_id }}?date={{ today }}">
+      {{ d.driver_name or d.driver_id }}
+    </a>
+    {% if d.driver_name %}
+    <div class="muted small">{{ d.driver_id }}</div>
+    {% endif %}
+  </td>
+  <td><span class="status-chip status-{{ d.current_status or 'UNKNOWN' }}">{{ d.current_status or "—" }}</span></td>
+  <td>
+    {% if d.is_live %}
+    <span class="badge live">Live</span>
+    {% else %}
+    <span class="badge hist">Historical</span>
+    {% endif %}
+  </td>
+  <td>{{ d.event_count }}</td>
+  <td class="muted">{{ d.last_event_at.isoformat() if d.last_event_at else "—" }}</td>
+  <td><a class="btn-sm" href="/ui/drivers/{{ d.driver_id }}?date={{ today }}">Open day</a></td>
+</tr>
+{% else %}
+<tr>
+  <td colspan="6" class="empty">
+    No drivers yet. Seed with
+    <code>make db-up && python scripts/fetch_hos_history.py --from-file data/hos_10d_canonical.json --persist</code>
+  </td>
+</tr>
+{% endfor %}

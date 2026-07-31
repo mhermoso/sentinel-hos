@@ -455,6 +455,25 @@ def write_html_report(result: Dict[str, Any], reports_dir: Path, ts: str) -> Pat
     return path
 
 
+def write_backtest_dispatches(
+    result: Dict[str, Any],
+    output_path: Path,
+) -> Path:
+    """Write would-dispatch events for the HOS timeline dashboard UI."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "meta": result["meta"],
+        "summary": {
+            "raw_violation_count": result["summary"]["raw_violation_count"],
+            "would_dispatch_count": result["summary"]["would_dispatch_count"],
+        },
+        "dispatches": result.get("dispatch_events", []),
+    }
+    with output_path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+    return output_path
+
+
 def write_reports(
     result: Dict[str, Any],
     reports_dir: Path,
@@ -558,7 +577,7 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=_ROOT / "data" / "hos_10d_canonical.json",
+        default=_ROOT / "data" / "hos_30d_canonical.json",
         help="Canonical JSON grouped by driver_id",
     )
     parser.add_argument(
@@ -589,6 +608,17 @@ def main() -> None:
         action="store_true",
         help="Export self-contained HTML report with sortable tables",
     )
+    parser.add_argument(
+        "--dispatches-out",
+        type=Path,
+        default=_ROOT / "data" / "backtest_dispatches.json",
+        help="Path for dashboard alert markers JSON (default: data/backtest_dispatches.json)",
+    )
+    parser.add_argument(
+        "--no-dispatches-out",
+        action="store_true",
+        help="Skip writing data/backtest_dispatches.json for the dashboard UI",
+    )
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -605,6 +635,10 @@ def main() -> None:
         export_csv=args.csv,
         export_html=args.html,
     )
+
+    if not args.no_dispatches_out:
+        dispatches_path = write_backtest_dispatches(result, args.dispatches_out)
+        logger.info("Dashboard dispatches: %s (%d events)", dispatches_path, len(result.get("dispatch_events", [])))
 
     logger.info(
         "Backtest complete: raw=%d would_dispatch=%d",

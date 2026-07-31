@@ -1,0 +1,47 @@
+---
+description: Python coding standards for dcw-backend
+globs: dcw-backend/**/*.py
+alwaysApply: false
+---
+
+# Python Standards
+
+## Tooling
+
+- Python 3.12+, config in `pyproject.toml` (Ruff line-length 120, Mypy strict)
+- Run `make format && make lint` before PRs
+- Use `from __future__ import annotations` in new modules
+
+## Naming
+
+| Element | Convention | Example |
+|---------|-----------|---------|
+| Modules | snake_case | `state_machine.py` |
+| Classes | PascalCase | `IngestionRepository` |
+| Functions | snake_case | `persist_canonical_logs` |
+| Private helpers | `_leading_underscore` | `_map_geotab_status` |
+| Constants | UPPER_SNAKE_CASE | `COMPLIANCE_ALERTS_CHANNEL` |
+| ORM models | PascalCase + `Record` suffix | `CanonicalHOSLogRecord` |
+| API responses | `*Response` suffix | `ComplianceSnapshotResponse` |
+| Canonical model | `DCW` prefix | `DCWCanonicalHOSLog` |
+
+## Logging
+
+```python
+logger = logging.getLogger("dcw.<domain>.<component>")
+# e.g. dcw.ingestion.poller, dcw.engine.rule_pack, dcw.adapters.geotab
+```
+
+## Immutability & Time
+
+- Use `model_config = ConfigDict(frozen=True)` for canonical and compliance types
+- All datetimes must be UTC-aware (`timezone.utc` / `zoneinfo`)
+- Tenant scope: always filter by `tenant_id` on queries
+
+## Redis Key Patterns
+
+```
+cursor:{provider}:{tenant_id}
+set:active_drivers
+alert_lock:{tenant_id}:{driver_id}:{shift_id}:{rule}:{stage}
+```

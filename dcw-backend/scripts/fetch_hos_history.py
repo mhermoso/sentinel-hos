@@ -111,6 +111,9 @@ def group_by_driver(logs: List[DCWCanonicalHOSLog]) -> Dict[str, List[Dict[str, 
 
 
 async def persist_logs(logs: List[DCWCanonicalHOSLog]) -> int:
+    from app.core.database import init_db
+
+    await init_db()
     async with async_session_factory() as session:
         repo = IngestionRepository(session)
         inserted = await repo.persist_canonical_logs(logs)
@@ -120,19 +123,36 @@ async def persist_logs(logs: List[DCWCanonicalHOSLog]) -> int:
         return inserted
 
 
+def load_logs_from_grouped_json(path: Path) -> List[DCWCanonicalHOSLog]:
+    """Load flat canonical logs from a driver-grouped JSON file."""
+    with path.open(encoding="utf-8") as fh:
+        raw = json.load(fh)
+    logs: List[DCWCanonicalHOSLog] = []
+    for records in raw.values():
+        for record in records:
+            logs.append(DCWCanonicalHOSLog.model_validate(record))
+    return logs
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch Geotab HOS history as canonical JSON")
-    parser.add_argument("--days", type=int, default=10, help="Lookback window in days (default: 10)")
+    parser.add_argument("--days", type=int, default=30, help="Lookback window in days (default: 30)")
     parser.add_argument(
         "--output",
         type=Path,
-        default=_ROOT / "data" / "hos_10d_canonical.json",
+        default=_ROOT / "data" / "hos_30d_canonical.json",
         help="Output JSON path (grouped by driver_id)",
     )
     parser.add_argument(
         "--persist",
         action="store_true",
         help="Insert canonical logs into PostgreSQL via IngestionRepository",
+    )
+    parser.add_argument(
+        "--from-file",
+        type=Path,
+        default=None,
+        help="Skip Geotab fetch; load existing driver-grouped canonical JSON (for --persist seed)",
     )
     parser.add_argument(
         "--tenant-id",
@@ -146,20 +166,33 @@ def main() -> None:
         logger.error("Tenant ID required — set GEOTAB_DATABASE or pass --tenant-id")
         sys.exit(1)
 
-    logs = fetch_geotab_logs(days=args.days, tenant_id=tenant_id)
-    grouped = group_by_driver(logs)
+    if args.from_file:
+        if not args.from_file.exists():
+            logger.error("Input file not found: %s", args.from_file)
+            sys.exit(1)
+        logs = load_logs_from_grouped_json(args.from_file)
+        grouped = group_by_driver(logs)
+        logger.info("Loaded %d drivers from %s (no Geotab fetch)", len(grouped), args.from_file)
+        if args.from_file.resolve() != args.output.resolve():
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open("w", encoding="utf-8") as fh:
+                json.dump(grouped, fh, indent=2)
+            logger.info("Wrote copy to %s", args.output)
+    else:
+        logs = fetch_geotab_logs(days=args.days, tenant_id=tenant_id)
+        grouped = group_by_driver(logs)
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", encoding="utf-8") as fh:
-        json.dump(grouped, fh, indent=2)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with args.output.open("w", encoding="utf-8") as fh:
+            json.dump(grouped, fh, indent=2)
 
-    total_events = sum(len(v) for v in grouped.values())
-    logger.info(
-        "Wrote %d drivers / %d events to %s",
-        len(grouped),
-        total_events,
-        args.output,
-    )
+        total_events = sum(len(v) for v in grouped.values())
+        logger.info(
+            "Wrote %d drivers / %d events to %s",
+            len(grouped),
+            total_events,
+            args.output,
+        )
 
     if args.persist:
         inserted = asyncio.run(persist_logs(logs))

@@ -1,0 +1,124 @@
+<div id="day-grid-root">
+  <div class="panel-meta">
+    <strong>{{ day.date.isoformat() }}</strong>
+    <span>{{ day.events|length }} status segments</span>
+    <span>{{ day.alert_markers|length }} alert markers</span>
+    {% if day.carry_forward_status %}
+    <span class="muted">Carry-in: {{ day.carry_forward_status }}</span>
+    {% endif %}
+    <span class="hint">Click a marker for calculation details · grid refreshes every 45s</span>
+  </div>
+
+  <div class="hos-layout">
+    <div class="hos-grid-wrap">
+      <div class="hos-grid-host" data-hos-grid data-driver-id="{{ day.driver_id }}">
+        <script type="application/json">{{ day_json | tojson }}</script>
+      </div>
+      <ul class="hos-legend" aria-label="HOS grid legend">
+        <li>
+          <span class="hos-legend-swatch hos-legend-line" aria-hidden="true"></span>
+          Duty status line (OFF / SB / D / ON / UNK)
+        </li>
+        <li>
+          <span class="hos-legend-swatch hos-legend-stripe-pc" aria-hidden="true"></span>
+          Exemption PC (on OFF)
+          {% if day.totals.exemption_pc_seconds and day.totals.exemption_pc_seconds > 0 %}
+          <span class="muted">{{ day.totals.exemption_pc }}</span>
+          {% endif %}
+        </li>
+        <li>
+          <span class="hos-legend-swatch hos-legend-stripe-ym" aria-hidden="true"></span>
+          Exemption YM (on ON)
+          {% if day.totals.exemption_ym_seconds and day.totals.exemption_ym_seconds > 0 %}
+          <span class="muted">{{ day.totals.exemption_ym }}</span>
+          {% endif %}
+        </li>
+        <li>
+          <span class="hos-legend-swatch hos-legend-unk" aria-hidden="true"></span>
+          UNKNOWN (unmapped)
+          {% if day.totals.UNKNOWN_seconds and day.totals.UNKNOWN_seconds > 0 %}
+          <span class="muted">{{ day.totals.UNKNOWN }}</span>
+          {% endif %}
+        </li>
+        <li>
+          <span class="hos-legend-swatch hos-legend-triangle" aria-hidden="true"></span>
+          Warning
+        </li>
+        <li>
+          <span class="hos-legend-swatch hos-legend-diamond" aria-hidden="true"></span>
+          Violation
+        </li>
+        <li>
+          <span class="hos-legend-swatch hos-legend-circle" aria-hidden="true"></span>
+          Alert (critical)
+        </li>
+      </ul>
+    </div>
+    <aside class="duration-col">
+      <h2>Durations</h2>
+      <dl>
+        <div><dt>OFF</dt><dd>{{ day.totals.OFF }}{% if day.totals.OFF_mi %}<span class="dist">{{ '%.1f'|format(day.totals.OFF_mi) }} mi</span>{% endif %}</dd></div>
+        <div><dt>SB</dt><dd>{{ day.totals.SB }}{% if day.totals.SB_mi %}<span class="dist">{{ '%.1f'|format(day.totals.SB_mi) }} mi</span>{% endif %}</dd></div>
+        <div><dt>D</dt><dd>{{ day.totals.D }}{% if day.totals.D_mi %}<span class="dist">{{ '%.1f'|format(day.totals.D_mi) }} mi</span>{% endif %}</dd></div>
+        <div><dt>ON</dt><dd>{{ day.totals.ON }}{% if day.totals.ON_mi %}<span class="dist">{{ '%.1f'|format(day.totals.ON_mi) }} mi</span>{% endif %}</dd></div>
+        {% if day.totals.exemption_pc_seconds and day.totals.exemption_pc_seconds > 0 %}
+        <div class="exempt"><dt>PC</dt><dd>{{ day.totals.exemption_pc }}{% if day.totals.exemption_pc_mi %}<span class="dist">{{ '%.1f'|format(day.totals.exemption_pc_mi) }} mi</span>{% endif %}</dd></div>
+        {% endif %}
+        {% if day.totals.exemption_ym_seconds and day.totals.exemption_ym_seconds > 0 %}
+        <div class="exempt"><dt>YM</dt><dd>{{ day.totals.exemption_ym }}{% if day.totals.exemption_ym_mi %}<span class="dist">{{ '%.1f'|format(day.totals.exemption_ym_mi) }} mi</span>{% endif %}</dd></div>
+        {% endif %}
+        {% if day.totals.UNKNOWN_seconds and day.totals.UNKNOWN_seconds > 0 %}
+        <div class="unk"><dt>UNK</dt><dd>{{ day.totals.UNKNOWN }}</dd></div>
+        {% endif %}
+      </dl>
+      <div class="duration-total {% if day.totals.covers_full_day %}ok{% endif %}">
+        <span>Tracked</span>
+        <strong>{{ day.totals.total_hhmm }}</strong>
+        {% if day.totals.covers_full_day %}
+        <span class="check">✓ 24h</span>
+        {% else %}
+        <span class="muted">/ 24:00</span>
+        {% endif %}
+      </div>
+      {% if day.totals.distance_label %}
+      <div class="duration-total">
+        <span>Distance</span>
+        <strong>{{ day.totals.distance_label }}</strong>
+      </div>
+      {% endif %}
+    </aside>
+  </div>
+
+  {% if day.alert_markers %}
+  <div class="markers-list">
+    <h2>Alert markers</h2>
+    <ul>
+    {% for m in day.alert_markers %}
+      <li>
+        <button
+          type="button"
+          class="marker-btn"
+          data-alert-open
+          data-driver-id="{{ day.driver_id }}"
+          data-as-of="{{ m.as_of.isoformat() }}"
+          data-violation-type="{{ m.violation_type }}"
+          data-source="{{ m.source }}"
+          data-severity="{{ m.severity }}"
+          data-rule-ref="{{ m.rule_ref }}"
+          data-description="{{ m.description }}">
+          <span class="sev sev-{{ m.severity }}">{{ m.severity }}</span>
+          <strong>{{ m.violation_type }}</strong>
+          <span class="muted">{{ m.local_timestamp }}</span>
+          <span class="source">{{ m.source }}</span>
+          <div class="desc">{{ m.description }}</div>
+        </button>
+      </li>
+    {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+<script>
+  window.HOSGrid && window.HOSGrid.mountAll();
+  window.AlertDetail && window.AlertDetail.bindMarkerButtons();
+</script>
