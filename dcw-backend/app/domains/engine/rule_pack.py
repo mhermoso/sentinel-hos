@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from app.domains.engine.calculators import (
     check_driving_limit,
@@ -27,6 +27,7 @@ from app.domains.engine.schemas import (
     DriverTimeline,
     Violation,
 )
+from app.domains.engine.replay import truncate_timeline_to
 from app.domains.engine.state_machine import run_state_machine
 
 logger = logging.getLogger("dcw.engine.rule_pack")
@@ -47,6 +48,7 @@ class RulePack:
         timeline: DriverTimeline,
         inputs_hash: str,
         weekly_duty_seconds: float = 0.0,
+        as_of: Optional[datetime] = None,
     ) -> ComplianceResult:
         """Run all 5 HOS rule calculators against the driver timeline.
 
@@ -55,20 +57,30 @@ class RulePack:
             inputs_hash: SHA-256 digest of the canonical inputs (ADR-003).
             weekly_duty_seconds: Pre-computed rolling weekly duty seconds
                 from the last 7 or 8 days (passed in from repository layer).
+            as_of: Point-in-time for replay evaluation.  When set, the
+                timeline is truncated and a synthetic close event is added.
 
         Returns:
             ComplianceResult with remaining times and any violations.
         """
-        now = datetime.now(timezone.utc)
+        now = as_of if as_of is not None else datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        else:
+            now = now.astimezone(timezone.utc)
+
+        eval_timeline = truncate_timeline_to(timeline, now) if as_of is not None else timeline
+
         logger.debug(
-            "Evaluating rule pack %s for driver %s (%d events)",
+            "Evaluating rule pack %s for driver %s (%d events, as_of=%s)",
             self.version,
             timeline.driver_id,
-            len(timeline.events),
+            len(eval_timeline.events),
+            now.isoformat(),
         )
 
         # ── Run state machine ─────────────────────────────────────────
-        state = run_state_machine(timeline)
+        state = run_state_machine(eval_timeline)
 
         # ── Apply each rule calculator ────────────────────────────────
         all_violations: List[Violation] = []

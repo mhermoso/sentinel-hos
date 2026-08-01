@@ -9,7 +9,7 @@ Implements the Normalization Engine from the architecture spec:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from app.domains.ingestion.schemas import CanonicalDutyStatus, DCWCanonicalHOSLog
@@ -18,6 +18,19 @@ from app.domains.ingestion.schemas import CanonicalDutyStatus, DCWCanonicalHOSLo
 # ── Payload Sanitisation ─────────────────────────────────────────────────
 
 _SENSITIVE_KEYS = {"password", "sessionid", "credentials", "token", "secret", "auth"}
+
+
+def _json_safe_value(value: Any) -> Any:
+    """Recursively coerce values into JSON-serializable forms for JSONB storage."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return sanitize_raw_payload(value)
+    if isinstance(value, list):
+        return [_json_safe_value(item) for item in value]
+    return value
 
 
 def sanitize_raw_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -30,11 +43,11 @@ def sanitize_raw_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             sanitized[k] = sanitize_raw_payload(v)
         elif isinstance(v, list):
             sanitized[k] = [
-                sanitize_raw_payload(item) if isinstance(item, dict) else item
+                sanitize_raw_payload(item) if isinstance(item, dict) else _json_safe_value(item)
                 for item in v
             ]
         else:
-            sanitized[k] = v
+            sanitized[k] = _json_safe_value(v)
     return sanitized
 
 

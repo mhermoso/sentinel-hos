@@ -1,0 +1,221 @@
+# DCW full-stack Podman deployment manifest.
+# Usage: make kube-up  (or: podman kube play deploy/dcw-stack.yaml)
+#
+# Requires a pre-built image: make image-build
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dcw-config
+data:
+  ENVIRONMENT: production
+  DEBUG: "false"
+  POSTGRES_HOST: dcw-postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: dcw_user
+  POSTGRES_DB: dcw_compliance_db
+  REDIS_HOST: dcw-redis
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  DATABASE_URL: postgresql+asyncpg://dcw_user:dcw_secure_password@dcw-postgres:5432/dcw_compliance_db
+  REDIS_URL: redis://dcw-redis:6379/0
+  DEFAULT_RULE_PACK_VERSION: fmcsa-us-property@1.2.0
+  POLL_INTERVAL_SECONDS: "120"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dcw-secrets
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: dcw_secure_password
+  SECRET_KEY: change-me-in-production
+  GEOTAB_SERVER: my.geotab.com
+  GEOTAB_DATABASE: ""
+  GEOTAB_USERNAME: ""
+  GEOTAB_PASSWORD: ""
+  TWILIO_ACCOUNT_SID: ""
+  TWILIO_AUTH_TOKEN: ""
+  TWILIO_API_KEY_SID: ""
+  TWILIO_API_KEY_SECRET: ""
+  TWILIO_FROM_PHONE_NUMBER: ""
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dcw-stack
+  labels:
+    app: dcw
+spec:
+  restartPolicy: Always
+
+  containers:
+    # ── PostgreSQL 16 ──────────────────────────────────────────────────
+    - name: dcw-postgres
+      image: docker.io/library/postgres:16-alpine
+      ports:
+        - containerPort: 5432
+          hostPort: 5432
+      env:
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: dcw-config
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: POSTGRES_PASSWORD
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: dcw-config
+              key: POSTGRES_DB
+      volumeMounts:
+        - name: pgdata
+          mountPath: /var/lib/postgresql/data
+
+    # ── Redis 7.2 ──────────────────────────────────────────────────────
+    - name: dcw-redis
+      image: docker.io/library/redis:7.2-alpine
+      ports:
+        - containerPort: 6379
+          hostPort: 6379
+      command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+      volumeMounts:
+        - name: redisdata
+          mountPath: /data
+
+    # ── FastAPI API (dashboard + notifier subscriber) ────────────────────
+    - name: dcw-api
+      image: localhost/dcw-backend:latest
+      ports:
+        - containerPort: 8000
+          hostPort: 8000
+      envFrom:
+        - configMapRef:
+            name: dcw-config
+      env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: POSTGRES_PASSWORD
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: SECRET_KEY
+        - name: GEOTAB_SERVER
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: GEOTAB_SERVER
+        - name: GEOTAB_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: GEOTAB_DATABASE
+        - name: GEOTAB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: GEOTAB_USERNAME
+        - name: GEOTAB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: GEOTAB_PASSWORD
+        - name: TWILIO_ACCOUNT_SID
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: TWILIO_ACCOUNT_SID
+        - name: TWILIO_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: TWILIO_AUTH_TOKEN
+        - name: TWILIO_API_KEY_SID
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: TWILIO_API_KEY_SID
+        - name: TWILIO_API_KEY_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: TWILIO_API_KEY_SECRET
+        - name: TWILIO_FROM_PHONE_NUMBER
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: TWILIO_FROM_PHONE_NUMBER
+
+    # ── ARQ Worker (ingestion poller + compliance sweeper) ───────────────
+    - name: dcw-worker
+      image: localhost/dcw-backend:latest
+      command: ["arq", "app.domains.ingestion.poller.WorkerSettings"]
+      envFrom:
+        - configMapRef:
+            name: dcw-config
+      env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: POSTGRES_PASSWORD
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: SECRET_KEY
+        - name: GEOTAB_SERVER
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: GEOTAB_SERVER
+        - name: GEOTAB_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: GEOTAB_DATABASE
+        - name: GEOTAB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: GEOTAB_USERNAME
+        - name: GEOTAB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: GEOTAB_PASSWORD
+
+  volumes:
+    - name: pgdata
+      persistentVolumeClaim:
+        claimName: dcw-pgdata
+    - name: redisdata
+      persistentVolumeClaim:
+        claimName: dcw-redisdata
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dcw-pgdata
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dcw-redisdata
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

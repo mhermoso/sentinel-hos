@@ -50,7 +50,24 @@ class Settings(BaseSettings):
     # ── Twilio Alerting ──────────────────────────────────────────────────
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_API_KEY_SID: str = ""
+    TWILIO_API_KEY_SECRET: str = ""
     TWILIO_FROM_PHONE_NUMBER: str = ""
+    TWILIO_TEST_TO_PHONE: str = Field(
+        default="",
+        description="Override driver phone for validation (E.164)",
+    )
+    TWILIO_TEST_DISPATCHER_PHONE: str = Field(
+        default="",
+        description="Override dispatcher phone for validation (E.164)",
+    )
+
+    # ── Alert logging / dry-run ──────────────────────────────────────────
+    ALERT_LOG_PATH: str = "logs/compliance-alerts.log"
+    ALERT_DRY_RUN: bool = Field(
+        default=True,
+        description="When true, log alerts but skip Twilio dispatch",
+    )
 
     # ── Stripe Billing ───────────────────────────────────────────────────
     STRIPE_SECRET_KEY: str = ""

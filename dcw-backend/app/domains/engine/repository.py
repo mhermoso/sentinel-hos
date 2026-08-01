@@ -10,7 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.domains.engine.models import AuditRecord
+from app.domains.engine.replay import compute_weekly_duty_seconds
 from app.domains.engine.schemas import ComplianceResult, DriverTimeline
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.schemas import CanonicalDutyStatus
@@ -77,9 +79,11 @@ class EngineRepository:
         tenant_id: str,
         driver_id: str,
         cycle_days: int,
+        as_of: datetime | None = None,
     ) -> float:
         """Sum total on-duty seconds over the rolling weekly cycle window."""
-        cutoff = datetime.now(timezone.utc) - timedelta(days=cycle_days)
+        now = as_of if as_of is not None else datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=cycle_days)
 
         stmt = (
             select(CanonicalHOSLogRecord)
@@ -87,6 +91,7 @@ class EngineRepository:
                 CanonicalHOSLogRecord.tenant_id == tenant_id,
                 CanonicalHOSLogRecord.driver_id == driver_id,
                 CanonicalHOSLogRecord.event_timestamp >= cutoff,
+                CanonicalHOSLogRecord.event_timestamp <= now,
                 CanonicalHOSLogRecord.status.in_(
                     [
                         CanonicalDutyStatus.ON_DUTY.value,
@@ -101,15 +106,14 @@ class EngineRepository:
         result = await self.session.execute(stmt)
         records = list(result.scalars().all())
 
-        # Compute duration between consecutive events
-        total_seconds = 0.0
-        now = datetime.now(timezone.utc)
-        for i, rec in enumerate(records):
-            if i + 1 < len(records):
-                delta = records[i + 1].event_timestamp - rec.event_timestamp
-                total_seconds += max(0.0, delta.total_seconds())
-
-        return total_seconds
+        events = [
+            DriverTimeline.HOSEvent(
+                status=rec.status,
+                timestamp=rec.event_timestamp,
+            )
+            for rec in records
+        ]
+        return compute_weekly_duty_seconds(events, cycle_days=cycle_days, as_of=now)
 
     async def persist_audit_record(self, result: ComplianceResult) -> None:
         """Persist a compliance evaluation result as an immutable audit record."""

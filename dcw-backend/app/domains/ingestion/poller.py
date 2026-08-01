@@ -41,10 +41,22 @@ async def startup(ctx: Dict[str, Any]) -> None:
     await init_db()
     await init_redis()
 
-    _geotab_adapter = GeotabAdapter()
-    await _geotab_adapter.connect()
+    if settings.GEOTAB_DATABASE and settings.GEOTAB_USERNAME and settings.GEOTAB_PASSWORD:
+        try:
+            _geotab_adapter = GeotabAdapter()
+            await _geotab_adapter.connect()
+            ctx["geotab_adapter"] = _geotab_adapter
+            logger.info("Geotab adapter connected")
+        except Exception as exc:
+            logger.error("Geotab adapter connection failed: %s — poller will idle", exc)
+            ctx["geotab_adapter"] = None
+    else:
+        logger.warning(
+            "Geotab credentials not configured — ingestion poller will idle until "
+            "GEOTAB_DATABASE, GEOTAB_USERNAME, and GEOTAB_PASSWORD are set"
+        )
+        ctx["geotab_adapter"] = None
 
-    ctx["geotab_adapter"] = _geotab_adapter
     logger.info("DCW ingestion worker ready")
 
 
@@ -58,7 +70,11 @@ async def poll_geotab_feed(ctx: Dict[str, Any]) -> Dict[str, Any]:
 
     Orchestrates: fetch → normalise → hash → persist → update Redis.
     """
-    adapter: GeotabAdapter = ctx["geotab_adapter"]
+    adapter: GeotabAdapter | None = ctx.get("geotab_adapter")
+    if adapter is None:
+        logger.debug("Geotab adapter not configured — skipping poll cycle")
+        return {"records_fetched": 0, "skipped": True}
+
     tenant_id = settings.GEOTAB_DATABASE
 
     # 1. Load cursor
