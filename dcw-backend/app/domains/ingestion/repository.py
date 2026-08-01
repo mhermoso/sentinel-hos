@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Set
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,11 @@ from app.domains.ingestion.models import CanonicalHOSLogRecord, GpsBreadcrumbRec
 from app.domains.ingestion.schemas import DCWCanonicalHOSLog, DCWGpsBreadcrumb
 
 logger = logging.getLogger("dcw.ingestion.repository")
+
+
+def _driver_resolution_cache_key(device_id: str, as_of: datetime) -> str:
+    """Cache key for device→driver resolution at a specific as-of instant."""
+    return f"{device_id}|{as_of.isoformat()}"
 
 
 class IngestionRepository:
@@ -117,10 +122,12 @@ class IngestionRepository:
         """Resolve driver_id from latest HOS log for device at or before ``as_of``.
 
         Falls back to ``unassigned:device:{device_id}``. Uses optional in-memory
-        ``cache`` keyed by device_id to limit queries within a poll batch.
+        ``cache`` keyed by ``device_id|as_of`` so mid-batch device handoffs still
+        resolve per breadcrumb timestamp (append-only rows cannot be corrected later).
         """
-        if cache is not None and device_id in cache:
-            return cache[device_id]
+        cache_key = _driver_resolution_cache_key(device_id, as_of)
+        if cache is not None and cache_key in cache:
+            return cache[cache_key]
 
         stmt = (
             select(CanonicalHOSLogRecord.driver_id)
@@ -136,7 +143,7 @@ class IngestionRepository:
         driver_id = result.scalar_one_or_none()
         if driver_id:
             if cache is not None:
-                cache[device_id] = driver_id
+                cache[cache_key] = driver_id
             return driver_id
         return f"unassigned:device:{device_id}"
 
@@ -211,8 +218,10 @@ class IngestionRepository:
     ) -> List[GpsBreadcrumbRecord]:
         """Fetch GPS breadcrumbs for a driver's day route.
 
-        Includes rows attributed to ``driver_id`` and crumbs on devices the driver
-        used that day (from HOS logs), so unassigned device trails still render.
+        Includes rows attributed to ``driver_id`` and *unassigned* crumbs on
+        devices the driver used that day (from HOS logs), so device trails still
+        render when ingest lacked a HOS match. Does **not** include crumbs
+        attributed to other drivers on a shared device (handoff privacy).
         Results are ordered by timestamp and deduplicated by ``raw_id``.
         """
         device_ids = await self._distinct_device_ids_for_driver_day(
@@ -220,7 +229,12 @@ class IngestionRepository:
         )
         match_clauses = [GpsBreadcrumbRecord.driver_id == driver_id]
         if device_ids:
-            match_clauses.append(GpsBreadcrumbRecord.device_id.in_(device_ids))
+            match_clauses.append(
+                and_(
+                    GpsBreadcrumbRecord.device_id.in_(device_ids),
+                    GpsBreadcrumbRecord.driver_id.like("unassigned:%"),
+                )
+            )
 
         stmt = (
             select(GpsBreadcrumbRecord)

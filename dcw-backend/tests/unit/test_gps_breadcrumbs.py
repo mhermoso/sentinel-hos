@@ -11,7 +11,10 @@ import pytest
 from app.core.security import hash_gps_breadcrumb
 from app.domains.ingestion.adapters.geotab import map_geotab_log_record_to_breadcrumb
 from app.domains.ingestion.models import GpsBreadcrumbRecord
-from app.domains.ingestion.repository import IngestionRepository
+from app.domains.ingestion.repository import (
+    IngestionRepository,
+    _driver_resolution_cache_key,
+)
 from app.domains.ingestion.schemas import DCWGpsBreadcrumb
 
 
@@ -110,8 +113,8 @@ async def test_resolve_driver_for_device_uses_cache() -> None:
     session = MagicMock()
     session.execute = AsyncMock()
     repo = IngestionRepository(session)
-    cache = {"dev-cached": "drv-cached"}
     as_of = datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
+    cache = {_driver_resolution_cache_key("dev-cached", as_of): "drv-cached"}
     driver_id = await repo.resolve_driver_for_device(
         tenant_id="t1",
         device_id="dev-cached",
@@ -139,7 +142,7 @@ async def test_resolve_driver_for_device_from_hos() -> None:
         cache=cache,
     )
     assert driver_id == "drv-from-hos"
-    assert cache["dev-y"] == "drv-from-hos"
+    assert cache[_driver_resolution_cache_key("dev-y", as_of)] == "drv-from-hos"
 
 
 @pytest.mark.asyncio
@@ -159,7 +162,7 @@ async def test_resolve_driver_for_device_does_not_cache_unassigned() -> None:
         cache=cache,
     )
     assert driver_id == "unassigned:device:dev-x"
-    assert "dev-x" not in cache
+    assert _driver_resolution_cache_key("dev-x", as_of) not in cache
 
     result.scalar_one_or_none.return_value = "drv-late"
     driver_id_late = await repo.resolve_driver_for_device(
@@ -169,8 +172,46 @@ async def test_resolve_driver_for_device_does_not_cache_unassigned() -> None:
         cache=cache,
     )
     assert driver_id_late == "drv-late"
-    assert cache["dev-x"] == "drv-late"
+    assert cache[_driver_resolution_cache_key("dev-x", as_of)] == "drv-late"
     assert session.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_resolve_driver_for_device_cache_is_as_of_scoped() -> None:
+    """Device handoff mid-batch must not reuse an earlier as_of resolution."""
+    session = MagicMock()
+    first = MagicMock()
+    first.scalar_one_or_none.return_value = "drv-a"
+    second = MagicMock()
+    second.scalar_one_or_none.return_value = "drv-b"
+    session.execute = AsyncMock(side_effect=[first, second])
+
+    repo = IngestionRepository(session)
+    cache: dict[str, str] = {}
+    morning = datetime(2026, 7, 30, 9, 0, tzinfo=UTC)
+    afternoon = datetime(2026, 7, 30, 14, 0, tzinfo=UTC)
+
+    assert (
+        await repo.resolve_driver_for_device(
+            tenant_id="t1",
+            device_id="dev-1",
+            as_of=morning,
+            cache=cache,
+        )
+        == "drv-a"
+    )
+    assert (
+        await repo.resolve_driver_for_device(
+            tenant_id="t1",
+            device_id="dev-1",
+            as_of=afternoon,
+            cache=cache,
+        )
+        == "drv-b"
+    )
+    assert session.execute.await_count == 2
+    assert cache[_driver_resolution_cache_key("dev-1", morning)] == "drv-a"
+    assert cache[_driver_resolution_cache_key("dev-1", afternoon)] == "drv-b"
 
 
 def _mock_crumb(
@@ -217,6 +258,40 @@ async def test_get_gps_breadcrumbs_for_driver_day_route_includes_device_trails()
     assert len(result) == 2
     assert [c.raw_id for c in result] == ["r1", "r2"]
     assert session.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_gps_breadcrumbs_for_driver_day_route_excludes_other_drivers() -> None:
+    """Shared-device handoff must not include other drivers via the device-IN clause."""
+    session = MagicMock()
+    device_result = MagicMock()
+    device_result.scalars.return_value.all.return_value = ["truck-1"]
+
+    gps_result = MagicMock()
+    morning = datetime(2026, 7, 30, 9, 0, tzinfo=UTC)
+    # Repository SQL filters other drivers; mock returns only rows the query would.
+    gps_result.scalars.return_value.all.return_value = [
+        _mock_crumb("r-a", "drv-a", "truck-1", morning),
+        _mock_crumb("r-u", "unassigned:device:truck-1", "truck-1", morning),
+    ]
+
+    session.execute = AsyncMock(side_effect=[device_result, gps_result])
+
+    repo = IngestionRepository(session)
+    start = datetime(2026, 7, 30, 5, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 31, 5, 0, tzinfo=UTC)
+    result = await repo.get_gps_breadcrumbs_for_driver_day_route(
+        tenant_id="t1",
+        driver_id="drv-a",
+        start_utc=start,
+        end_utc=end,
+    )
+    assert [c.raw_id for c in result] == ["r-a", "r-u"]
+
+    gps_stmt = session.execute.await_args_list[1].args[0]
+    compiled = gps_stmt.compile()
+    assert "LIKE" in str(compiled)
+    assert "unassigned:%" in {str(v) for v in compiled.params.values()}
 
 
 @pytest.mark.asyncio
