@@ -21,11 +21,13 @@ import mygeotab.serializers as geo_serializers
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.core.redis import get_redis
+from app.domains.dashboard.driver_names import save_driver_names_to_redis
 from app.domains.ingestion.adapters.geotab import (
     GeotabAdapter,
     map_geotab_log_record_to_breadcrumb,
     map_geotab_log_to_canonical,
 )
+from app.domains.ingestion.geotab_users import build_geotab_driver_name_map
 from app.domains.ingestion.normalizer import normalize_batch
 from app.domains.ingestion.repository import IngestionRepository
 from app.domains.ingestion.schemas import DCWCanonicalHOSLog, DCWGpsBreadcrumb
@@ -45,20 +47,6 @@ def _plain_record(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
     return json.loads(geo_serializers.json_serialize(raw))
-
-
-def _build_driver_name_map(api: mygeotab.API) -> dict[str, str]:
-    users = api.get("User")
-    name_map: dict[str, str] = {}
-    for user in users:
-        uid = user.get("id")
-        if not uid:
-            continue
-        first = user.get("firstName", "") or ""
-        last = user.get("lastName", "") or ""
-        full_name = f"{first} {last}".strip() or user.get("name", uid)
-        name_map[str(uid)] = full_name
-    return name_map
 
 
 async def _advance_feed_tip(
@@ -116,7 +104,8 @@ async def _backfill_hos(api: mygeotab.API, tenant_id: str, days: int) -> dict[st
     from_iso = from_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     logger.info("Backfilling DutyStatusLog from %s (%d days)", from_iso, days)
 
-    driver_names = await asyncio.to_thread(_build_driver_name_map, api)
+    driver_names = await asyncio.to_thread(build_geotab_driver_name_map, api)
+    await save_driver_names_to_redis(tenant_id, driver_names)
     raw_logs = await asyncio.to_thread(
         api.get, "DutyStatusLog", search={"fromDate": from_iso}
     )

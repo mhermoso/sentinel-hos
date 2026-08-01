@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from app.core.config import settings
 from app.domains.ingestion.adapters import BaseTelematicsAdapter
+from app.domains.ingestion.geotab_users import build_geotab_driver_name_map
 from app.domains.ingestion.normalizer import (
     normalize_coordinates,
     normalize_timestamp,
@@ -247,6 +248,7 @@ class GeotabAdapter(BaseTelematicsAdapter):
 
     def __init__(self) -> None:
         self.api: Optional[mygeotab.API] = None
+        self._driver_names: Dict[str, str] = {}
 
     async def connect(self) -> None:
         """Authenticate with the MyGeotab API."""
@@ -272,6 +274,17 @@ class GeotabAdapter(BaseTelematicsAdapter):
             logger.error("MyGeotab SDK error during connect: %s", exc)
             raise
 
+    async def refresh_driver_names(self) -> Dict[str, str]:
+        """Load id→name from MyGeotab User into the adapter cache."""
+        if self.api is None:
+            await self.connect()
+            assert self.api is not None
+        self._driver_names = await asyncio.to_thread(
+            build_geotab_driver_name_map, self.api
+        )
+        logger.info("Loaded %d Geotab driver names into adapter cache", len(self._driver_names))
+        return self._driver_names
+
     async def fetch_feed(
         self,
         tenant_id: str,
@@ -289,6 +302,12 @@ class GeotabAdapter(BaseTelematicsAdapter):
         if self.api is None:
             await self.connect()
             assert self.api is not None
+
+        if not self._driver_names:
+            try:
+                await self.refresh_driver_names()
+            except Exception as exc:
+                logger.warning("Driver name preload failed; continuing without names: %s", exc)
 
         try:
             loop = asyncio.get_running_loop()
@@ -317,8 +336,11 @@ class GeotabAdapter(BaseTelematicsAdapter):
         for record in records:
             record_id = record.get("id", "UNKNOWN_ID")
             try:
+                driver_id = _extract_driver_id(record)
                 canonical_log = map_geotab_log_to_canonical(
-                    record, tenant_id=tenant_id
+                    record,
+                    tenant_id=tenant_id,
+                    driver_name=self._driver_names.get(driver_id),
                 )
                 valid_logs.append(canonical_log)
             except ValidationError as ve:

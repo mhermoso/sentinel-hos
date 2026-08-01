@@ -31,6 +31,10 @@ from app.domains.ingestion.adapters.geotab import (
     GeotabAdapter,
     map_geotab_log_record_to_breadcrumb,
 )
+from app.domains.dashboard.driver_names import (
+    save_driver_names_to_redis,
+    warm_driver_name_cache,
+)
 from app.domains.ingestion.history_backfill import maybe_run_history_backfill
 from app.domains.ingestion.normalizer import normalize_batch
 from app.domains.ingestion.repository import IngestionRepository
@@ -64,6 +68,12 @@ async def startup(ctx: dict[str, Any]) -> None:
             logger.error("Geotab adapter connection failed: %s — poller will idle", exc)
             ctx["geotab_adapter"] = None
         else:
+            try:
+                names = await _geotab_adapter.refresh_driver_names()
+                await save_driver_names_to_redis(settings.GEOTAB_DATABASE, names)
+                await warm_driver_name_cache()
+            except Exception as exc:
+                logger.warning("Driver name cache refresh failed: %s", exc)
             # Ensure last N days are present (Get by date), then tip cursors.
             # Failures are logged inside the backfill; polling continues either way.
             try:

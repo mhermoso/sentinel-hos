@@ -21,8 +21,10 @@ from app.core.config import settings
 from app.core.database import close_db, init_db
 from app.core.ops_log import configure_ops_log
 from app.core.redis import close_redis, init_redis
+from app.domains.dashboard.driver_names import warm_driver_name_cache
 from app.domains.dashboard.router import router as dashboard_router
 from app.domains.dashboard.ui import ui_router
+from app.domains.ingestion.adapters.geotab import GeotabAdapter
 from app.domains.notifier.subscriber import run_subscriber_loop
 
 logger = logging.getLogger("dcw.main")
@@ -75,6 +77,21 @@ async def on_startup() -> None:
 
     await init_redis()
     logger.info("Redis connection pool ready")
+
+    # Warm driver display names (Redis → optional Geotab User cold-start).
+    geotab_api = None
+    if settings.GEOTAB_DATABASE and settings.GEOTAB_USERNAME and settings.GEOTAB_PASSWORD:
+        try:
+            adapter = GeotabAdapter()
+            await adapter.connect()
+            geotab_api = adapter.api
+        except Exception as exc:
+            logger.warning("Geotab unavailable for driver-name warm: %s", exc)
+    try:
+        named = await warm_driver_name_cache(geotab_api=geotab_api)
+        logger.info("Driver name cache ready (%d names)", named)
+    except Exception as exc:
+        logger.warning("Driver name cache warm failed: %s", exc)
 
     # Start the compliance alert subscriber as a background task
     _subscriber_task = asyncio.create_task(run_subscriber_loop())
