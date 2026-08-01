@@ -129,6 +129,22 @@ class Settings(BaseSettings):
     # ── Ingestion Poller ─────────────────────────────────────────────────
     POLL_INTERVAL_SECONDS: int = 120
     FEED_RESULTS_LIMIT: int = 5000
+    HISTORY_BACKFILL_ON_STARTUP: bool = Field(
+        default=True,
+        description=(
+            "When true, the ARQ worker runs a one-shot Geotab Get backfill for "
+            "the last HISTORY_BACKFILL_DAYS (HOS) / GPS_BACKFILL_DAYS (LogRecord) "
+            "before incremental GetFeed polling. Guarded by a Redis flag."
+        ),
+    )
+    HISTORY_BACKFILL_DAYS: int = Field(
+        default=30,
+        description="DutyStatusLog lookback window for startup history backfill",
+    )
+    GPS_BACKFILL_DAYS: int = Field(
+        default=30,
+        description="LogRecord GPS lookback window for startup history backfill",
+    )
 
 
 settings = Settings()

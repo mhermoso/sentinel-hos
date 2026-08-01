@@ -31,6 +31,7 @@ from app.domains.ingestion.adapters.geotab import (
     GeotabAdapter,
     map_geotab_log_record_to_breadcrumb,
 )
+from app.domains.ingestion.history_backfill import maybe_run_history_backfill
 from app.domains.ingestion.normalizer import normalize_batch
 from app.domains.ingestion.repository import IngestionRepository
 from app.domains.ingestion.schemas import DCWGpsBreadcrumb
@@ -62,6 +63,13 @@ async def startup(ctx: dict[str, Any]) -> None:
         except Exception as exc:
             logger.error("Geotab adapter connection failed: %s — poller will idle", exc)
             ctx["geotab_adapter"] = None
+        else:
+            # Ensure last N days are present (Get by date), then tip cursors.
+            # Failures are logged inside the backfill; polling continues either way.
+            try:
+                await maybe_run_history_backfill(_geotab_adapter)
+            except Exception as exc:
+                logger.error("History backfill failed: %s — continuing with live poll", exc)
     else:
         logger.warning(
             "Geotab credentials not configured — ingestion poller will idle until "

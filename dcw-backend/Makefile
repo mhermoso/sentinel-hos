@@ -109,7 +109,7 @@ fetch-history:
 	$(PYTHON) scripts/fetch_hos_history.py --days $(DAYS) --output $(HISTORY_JSON)
 
 # GPS breadcrumb backfill (ADR-007). Override: make fetch-gps-history GPS_DAYS=14
-GPS_DAYS ?= 7
+GPS_DAYS ?= 30
 fetch-gps-history:
 	$(PYTHON) scripts/fetch_gps_history.py --days $(GPS_DAYS) --persist
 
