@@ -2,8 +2,13 @@
 {% block title %}{{ day.driver_name or day.driver_id }} — {{ day.date }} — Sentinel HOS{% endblock %}
 
 {% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script src="/static/hos_grid.js" defer></script>
 <script src="/static/alert_detail.js" defer></script>
+<script src="/static/route_map.js" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -25,6 +30,10 @@
     </form>
     <a class="btn-sm" href="/ui/drivers/{{ day.driver_id }}?date={{ next_date }}">Next →</a>
     <a class="btn-sm" href="/ui/drivers/{{ day.driver_id }}?date={{ today }}">Today</a>
+    <button type="button" class="btn-sm"
+            data-route-open
+            data-driver-id="{{ day.driver_id }}"
+            data-date="{{ day.date.isoformat() }}">Route map</button>
   </div>
 </section>
 
@@ -63,6 +72,21 @@
     </div>
   </aside>
 </div>
+
+<div id="route-drawer" class="alert-drawer" aria-hidden="true">
+  <div class="alert-drawer-backdrop" onclick="window.RouteMap && window.RouteMap.close()"></div>
+  <aside class="alert-drawer-panel route-drawer-panel" role="dialog" aria-label="Driver day route map">
+    <div class="alert-drawer-toolbar">
+      <button type="button" class="btn-sm" data-drawer-expand
+              onclick="window.RouteMap && window.RouteMap.toggleFullscreen()">Expand</button>
+      <button type="button" class="btn-sm drawer-close"
+              onclick="window.RouteMap && window.RouteMap.close()">Close</button>
+    </div>
+    <div id="route-drawer-body">
+      <p class="muted" style="padding:1.5rem">Open Route map to see the GPS trail for this day.</p>
+    </div>
+  </aside>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -73,13 +97,19 @@
     if (target.id === "day-panel" || target.id === "day-grid-root") {
       window.HOSGrid && window.HOSGrid.mountAll(target);
       window.AlertDetail && window.AlertDetail.bindMarkerButtons(target);
+      window.RouteMap && window.RouteMap.bindOpenButtons(target);
+      window.SortableTables && window.SortableTables.bind(target);
     }
     if (target.id === "alert-drawer-body") {
       window.AlertDetail && window.AlertDetail.mount(target);
     }
+    if (target.id === "route-drawer-body") {
+      window.RouteMap && window.RouteMap.mount(target);
+    }
   });
   // Initial bind (in case inline script in partial ran before alert_detail.js)
   window.AlertDetail && window.AlertDetail.bindMarkerButtons();
+  window.RouteMap && window.RouteMap.bindOpenButtons();
 </script>
 {% endblock %}
 

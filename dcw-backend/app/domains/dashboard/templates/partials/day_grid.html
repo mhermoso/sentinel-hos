@@ -1,4 +1,6 @@
 <div id="day-grid-root">
+  {% include "partials/day_clocks.html" %}
+
   <div class="panel-meta">
     <strong>{{ day.date.isoformat() }}</strong>
     <span>{{ day.events|length }} status segments</span>
@@ -6,6 +8,10 @@
     {% if day.carry_forward_status %}
     <span class="muted">Carry-in: {{ day.carry_forward_status }}</span>
     {% endif %}
+    <button type="button" class="btn-sm"
+            data-route-open
+            data-driver-id="{{ day.driver_id }}"
+            data-date="{{ day.date.isoformat() }}">Route map</button>
     <span class="hint">Click a marker for calculation details · grid refreshes every 45s</span>
   </div>
 
@@ -89,6 +95,109 @@
     </aside>
   </div>
 
+  <section class="activity-log" aria-label="Day activity log">
+    <h2>Activity log</h2>
+    {% if day.events %}
+    <div class="activity-log-scroll">
+      <table class="activity-log-table"
+             data-sortable
+             data-sort-storage="dcw.activityLog.sort"
+             data-default-sort="end"
+             data-default-dir="desc">
+        <thead>
+          <tr>
+            <th data-sort-key="status" data-sort-as="text" aria-sort="none">
+              <button type="button" class="sort-btn" data-label="Status">Status</button>
+            </th>
+            <th data-sort-key="start" data-sort-as="time" aria-sort="none">
+              <button type="button" class="sort-btn" data-label="Start">Start</button>
+            </th>
+            <th data-sort-key="end" data-sort-as="time" aria-sort="descending">
+              <button type="button" class="sort-btn" data-label="End">End</button>
+            </th>
+            <th data-sort-key="duration" data-sort-as="number" aria-sort="none">
+              <button type="button" class="sort-btn" data-label="Duration">Duration</button>
+            </th>
+            <th data-sort-key="distance" data-sort-as="number" aria-sort="none">
+              <button type="button" class="sort-btn" data-label="Distance">Distance</button>
+            </th>
+            <th data-sort-key="origin" data-sort-as="text" aria-sort="none">
+              <button type="button" class="sort-btn" data-label="Origin">Origin</button>
+            </th>
+            <th data-sort-key="location" data-sort-as="text" aria-sort="none">
+              <button type="button" class="sort-btn" data-label="Location">Location</button>
+            </th>
+            <th data-sort-key="device" data-sort-as="text" aria-sort="none">
+              <button type="button" class="sort-btn" data-label="Device">Device</button>
+            </th>
+            <th data-sort-key="annotation" data-sort-as="text" aria-sort="none">
+              <button type="button" class="sort-btn" data-label="Annotation">Annotation</button>
+            </th>
+            <th data-sort-key="alerts" data-sort-as="number" aria-sort="none">
+              <button type="button" class="sort-btn" data-label="Alerts">Alerts</button>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for e in day.events %}
+          <tr class="activity-row status-row-{{ e.status }}{% if e.alerts %} has-alerts{% endif %}"
+              data-sortable-row
+              data-sort-status="{{ e.status }}"
+              data-sort-start="{{ e.event_timestamp.isoformat() }}"
+              data-sort-end="{{ e.local_end_timestamp or e.event_timestamp.isoformat() }}"
+              data-sort-duration="{{ e.duration_seconds }}"
+              data-sort-distance="{{ e.distance_m }}"
+              data-sort-origin="{{ (e.origin or '')|lower }}"
+              data-sort-location="{{ (e.location_label or '')|lower }}"
+              data-sort-device="{{ (e.device_id or '')|lower }}"
+              data-sort-annotation="{{ (e.annotation or '')|lower }}"
+              data-sort-alerts="{{ e.alerts|length }}">
+            <td>
+              <span class="status-pill status-{{ e.status }}">{{ e.status }}</span>
+              {% if e.continued %}<span class="continued">(Continued)</span>{% endif %}
+            </td>
+            <td class="mono">{{ e.event_timestamp | local_clock(day.timezone) }}</td>
+            <td class="mono">{{ e.local_end_timestamp | local_clock(day.timezone) }}</td>
+            <td class="mono">{{ e.duration_hms or e.duration_hhmm }}</td>
+            <td class="mono">{% if e.distance_label %}{{ e.distance_label }}{% else %}—{% endif %}</td>
+            <td>{{ e.origin or "—" }}</td>
+            <td class="loc">{{ e.location_label or "—" }}</td>
+            <td class="mono">{{ e.device_id or "—" }}</td>
+            <td class="anno">{{ e.annotation or "—" }}</td>
+            <td class="activity-alerts">
+              {% if e.alerts %}
+              <div class="activity-alerts-chips">
+                {% for a in e.alerts %}
+                <button
+                  type="button"
+                  class="alert-chip sev-{{ a.severity }}"
+                  data-alert-open
+                  data-driver-id="{{ day.driver_id }}"
+                  data-as-of="{{ a.as_of.isoformat() }}"
+                  data-violation-type="{{ a.violation_type }}"
+                  data-source="{{ a.source }}"
+                  data-severity="{{ a.severity }}"
+                  data-rule-ref="{{ a.rule_ref }}"
+                  data-description="{{ a.description }}"
+                  title="{{ a.description }}">
+                  {{ a.severity }}
+                </button>
+                {% endfor %}
+              </div>
+              {% else %}
+              —
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted">No duty status segments for this day.</p>
+    {% endif %}
+  </section>
+
   {% if day.alert_markers %}
   <div class="markers-list">
     <h2>Alert markers</h2>
@@ -108,7 +217,7 @@
           data-description="{{ m.description }}">
           <span class="sev sev-{{ m.severity }}">{{ m.severity }}</span>
           <strong>{{ m.violation_type }}</strong>
-          <span class="muted">{{ m.local_timestamp }}</span>
+          <span class="muted">{{ m.as_of | local_dt(day.timezone) }}</span>
           <span class="source">{{ m.source }}</span>
           <div class="desc">{{ m.description }}</div>
         </button>
@@ -121,4 +230,6 @@
 <script>
   window.HOSGrid && window.HOSGrid.mountAll();
   window.AlertDetail && window.AlertDetail.bindMarkerButtons();
+  window.RouteMap && window.RouteMap.bindOpenButtons();
+  window.SortableTables && window.SortableTables.bind(document.getElementById("day-grid-root"));
 </script>

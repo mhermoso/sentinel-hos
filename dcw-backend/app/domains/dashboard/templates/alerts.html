@@ -3,27 +3,37 @@
 
 {% block head %}
 <script src="/static/alert_detail.js" defer></script>
+<script src="/static/alerts_sort.js" defer></script>
 {% endblock %}
 
 {% block content %}
 <section class="page-head">
   <h1>Alerts</h1>
-  <p class="lede">Fleet warnings, violations, and critical alerts from backtest + live audit.</p>
+  <p class="lede">Fleet warnings and violations from backtest + live audit.</p>
 </section>
 
 <section class="panel">
+  <div class="range-chips" role="group" aria-label="Quick date ranges">
+    {% for chip in range_chips %}
+    <a class="range-chip {% if active_range == chip.key %}active{% endif %}"
+       href="/ui/alerts?from={{ chip.from }}&amp;to={{ chip.to }}{% if severity %}&amp;severity={{ severity }}{% endif %}{% if source %}&amp;source={{ source }}{% endif %}{% if driver_id %}&amp;driver_id={{ driver_id }}{% endif %}">
+      {{ chip.label }}
+    </a>
+    {% endfor %}
+  </div>
+
   <form class="alerts-filters" method="get" action="/ui/alerts"
         hx-get="/ui/alerts/partial"
         hx-target="#alerts-table-body"
         hx-trigger="change, submit"
-        hx-swap="innerHTML">
+        hx-swap="innerHTML"
+        hx-on::after-request="document.getElementById('alerts-count') && (document.getElementById('alerts-count').textContent = document.querySelectorAll('#alerts-table-body tr[data-alert-row]').length + ' alerts')">
     <label>
       Severity
       <select name="severity">
         <option value="" {% if not severity %}selected{% endif %}>All</option>
         <option value="WARNING" {% if severity == 'WARNING' %}selected{% endif %}>Warning</option>
         <option value="VIOLATION" {% if severity == 'VIOLATION' %}selected{% endif %}>Violation</option>
-        <option value="CRITICAL" {% if severity == 'CRITICAL' %}selected{% endif %}>Alert</option>
       </select>
     </label>
     <label>
@@ -54,15 +64,32 @@
     <span>Display TZ: {{ timezone }}{% if tz_abbrev %} ({{ tz_abbrev }}){% endif %}</span>
   </div>
 
-  <table class="alerts-table">
+  <table class="alerts-table" id="alerts-table"
+         data-sortable
+         data-sort-storage="dcw.alerts.sort"
+         data-default-sort="time"
+         data-default-dir="desc"
+         data-row-selector="tr[data-alert-row]">
     <thead>
       <tr>
-        <th>Time</th>
-        <th>Driver</th>
-        <th>Type</th>
-        <th>Severity</th>
-        <th>Source</th>
-        <th>Description</th>
+        <th data-sort-key="time" data-sort-as="time" aria-sort="descending">
+          <button type="button" class="sort-btn" data-label="Time">Time</button>
+        </th>
+        <th data-sort-key="driver" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Driver">Driver</button>
+        </th>
+        <th data-sort-key="type" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Type">Type</button>
+        </th>
+        <th data-sort-key="severity" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Severity">Severity</button>
+        </th>
+        <th data-sort-key="source" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Source">Source</button>
+        </th>
+        <th data-sort-key="description" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Description">Description</button>
+        </th>
         <th></th>
       </tr>
     </thead>
@@ -75,6 +102,12 @@
 <div id="alert-drawer" class="alert-drawer" aria-hidden="true">
   <div class="alert-drawer-backdrop" onclick="window.AlertDetail && window.AlertDetail.close()"></div>
   <aside class="alert-drawer-panel" role="dialog" aria-label="Alert calculation details">
+    <div class="alert-drawer-toolbar">
+      <button type="button" class="btn-sm" data-drawer-expand
+              onclick="window.AlertDetail && window.AlertDetail.toggleFullscreen()">Expand</button>
+      <button type="button" class="btn-sm drawer-close"
+              onclick="window.AlertDetail && window.AlertDetail.close()">Close</button>
+    </div>
     <div id="alert-drawer-body">
       <p class="muted" style="padding:1.5rem">Select an alert row to see calculation details.</p>
     </div>
@@ -85,21 +118,25 @@
 {% block scripts %}
 <script>
   document.body.addEventListener("htmx:afterSwap", (ev) => {
-    const target = ev.target;
-    if (!target) return;
-    if (target.id === "alerts-table-body") {
-      window.AlertDetail && window.AlertDetail.bindMarkerButtons(target);
-      const count = target.querySelectorAll("tr[data-alert-open]").length;
+    if (!ev.target) return;
+    if (ev.target.id === "alert-drawer-body") {
+      window.AlertDetail && window.AlertDetail.mount(ev.target);
+    }
+    if (ev.target.id === "alerts-table-body") {
+      window.AlertDetail && window.AlertDetail.bindMarkerButtons(ev.target);
+      window.AlertsSort && window.AlertsSort.reapply();
+      const count = ev.target.querySelectorAll("[data-alert-row]").length;
       const el = document.getElementById("alerts-count");
       if (el) el.textContent = count + " alerts";
     }
-    if (target.id === "alert-drawer-body") {
-      window.AlertDetail && window.AlertDetail.mount(target);
-    }
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") window.AlertDetail && window.AlertDetail.close();
+    if (ev.key === "Escape" && window.AlertDetail) {
+      if (window.AlertDetail.handleEscape) window.AlertDetail.handleEscape();
+      else window.AlertDetail.close();
+    }
   });
   window.AlertDetail && window.AlertDetail.bindMarkerButtons();
+  window.AlertsSort && window.AlertsSort.bind();
 </script>
 {% endblock %}

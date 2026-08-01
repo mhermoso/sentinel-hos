@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Sentinel HOS{% endblock %}</title>
   <link rel="stylesheet" href="/static/dashboard.css" />
-  <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvRhurtJWTsIASrmTdgRDXFCF" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+  <script src="/static/sortable_table.js" defer></script>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -18,6 +19,7 @@
       <a href="/ui/home" {% if current_path and current_path.startswith('/ui/home') %}class="active"{% endif %}>Home</a>
       <a href="/ui/drivers" {% if current_path and current_path.startswith('/ui/drivers') %}class="active"{% endif %}>Drivers</a>
       <a href="/ui/alerts" {% if current_path and current_path.startswith('/ui/alerts') %}class="active"{% endif %}>Alerts</a>
+      <a href="/ui/logs" {% if current_path and current_path.startswith('/ui/logs') %}class="active"{% endif %}>Logs</a>
       <a href="/docs" target="_blank" rel="noopener">API</a>
     </nav>
     <form class="tz-form" method="get" action="/ui/preferences/timezone" title="Display timezone for day grids and alert times">

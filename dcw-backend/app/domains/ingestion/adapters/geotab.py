@@ -3,6 +3,8 @@
 Refactored from the tested standalone ``geotab_ingestor.py`` to fit the
 ``BaseTelematicsAdapter`` interface while preserving all mapping logic,
 status/origin handling, and Geotab location quirks (x = Longitude, y = Latitude).
+
+Also maps Geotab ``LogRecord`` GPS breadcrumbs (ADR-007).
 """
 
 from __future__ import annotations
@@ -16,8 +18,16 @@ from pydantic import ValidationError
 
 from app.core.config import settings
 from app.domains.ingestion.adapters import BaseTelematicsAdapter
-from app.domains.ingestion.normalizer import sanitize_raw_payload
-from app.domains.ingestion.schemas import CanonicalDutyStatus, DCWCanonicalHOSLog
+from app.domains.ingestion.normalizer import (
+    normalize_coordinates,
+    normalize_timestamp,
+    sanitize_raw_payload,
+)
+from app.domains.ingestion.schemas import (
+    CanonicalDutyStatus,
+    DCWCanonicalHOSLog,
+    DCWGpsBreadcrumb,
+)
 
 logger = logging.getLogger("dcw.adapters.geotab")
 
@@ -159,6 +169,70 @@ def map_geotab_log_to_canonical(
     )
 
 
+def _extract_log_record_device_id(raw: Dict[str, Any]) -> Optional[str]:
+    """Extract device id from a Geotab LogRecord."""
+    device = raw.get("device")
+    if isinstance(device, dict) and device.get("id"):
+        return str(device["id"])
+    if isinstance(device, str) and device:
+        return device
+    return None
+
+
+def _extract_log_record_lat_lon(
+    raw: Dict[str, Any],
+) -> Tuple[Optional[float], Optional[float]]:
+    """Extract lat/lon from LogRecord (top-level y/x or nested location)."""
+    lat = raw.get("latitude", raw.get("y"))
+    lon = raw.get("longitude", raw.get("x"))
+    if lat is not None and lon is not None:
+        try:
+            return float(lat), float(lon)
+        except (TypeError, ValueError):
+            pass
+    return _extract_location(raw)
+
+
+def map_geotab_log_record_to_breadcrumb(
+    raw: Dict[str, Any],
+    tenant_id: str,
+    driver_id: str,
+) -> DCWGpsBreadcrumb:
+    """Map a raw MyGeotab LogRecord dict to ``DCWGpsBreadcrumb``.
+
+    GPS is rounded to 4 decimals and timestamps truncated to 1s (ADR-007).
+    ``driver_id`` must already be resolved by the caller (device attribution).
+    """
+    raw_id = str(raw.get("id", ""))
+    device_id = _extract_log_record_device_id(raw)
+    if not device_id:
+        raise ValueError("LogRecord missing device id")
+
+    latitude, longitude = _extract_log_record_lat_lon(raw)
+    if latitude is None or longitude is None:
+        raise ValueError("LogRecord missing latitude/longitude")
+
+    latitude, longitude = normalize_coordinates(latitude, longitude)
+    if latitude is None or longitude is None:
+        raise ValueError("LogRecord GPS normalized to None")
+
+    event_ts = raw.get("dateTime")
+    crumb = DCWGpsBreadcrumb(
+        tenant_id=tenant_id,
+        device_id=device_id,
+        driver_id=driver_id,
+        raw_id=raw_id,
+        event_timestamp=event_ts,
+        latitude=latitude,
+        longitude=longitude,
+        speed_kmh=float(raw["speed"]) if isinstance(raw.get("speed"), (int, float)) else None,
+        raw_payload=sanitize_raw_payload(raw),
+    )
+    return crumb.model_copy(
+        update={"event_timestamp": normalize_timestamp(crumb.event_timestamp)}
+    )
+
+
 # ── Adapter Class ────────────────────────────────────────────────────────
 
 
@@ -166,6 +240,7 @@ class GeotabAdapter(BaseTelematicsAdapter):
     """MyGeotab API adapter using GetFeed for continuous HOS log polling.
 
     Wraps the proven ``mygeotab`` SDK calls from the tested ingestor module.
+    Also polls ``LogRecord`` GPS breadcrumbs for route maps (ADR-007).
     """
 
     provider_name = "geotab"
@@ -260,3 +335,40 @@ class GeotabAdapter(BaseTelematicsAdapter):
                 )
 
         return valid_logs, str(to_version)
+
+    async def fetch_log_record_feed(
+        self,
+        tenant_id: str,
+        from_cursor: str,
+    ) -> Tuple[List[Dict[str, Any]], str]:
+        """Fetch a batch of raw LogRecord dicts via GetFeed.
+
+        Returns raw records (not breadcrumbs) so the poller can resolve
+        device→driver attribution before mapping.
+        """
+        if self.api is None:
+            await self.connect()
+            assert self.api is not None
+
+        try:
+            loop = asyncio.get_running_loop()
+            feed_response = await loop.run_in_executor(
+                None,
+                lambda: self.api.call(
+                    "GetFeed",
+                    typeName="LogRecord",
+                    fromVersion=from_cursor,
+                    resultsLimit=settings.FEED_RESULTS_LIMIT,
+                ),
+            )
+        except mygeotab.AuthenticationException:
+            logger.warning("Geotab session expired — re-authenticating…")
+            await self.connect()
+            return await self.fetch_log_record_feed(tenant_id, from_cursor)
+        except mygeotab.MyGeotabException as exc:
+            logger.error("Geotab API error fetching LogRecord feed: %s", exc)
+            raise
+
+        records = feed_response.get("result", feed_response.get("data", []))
+        to_version = feed_response.get("toVersion", from_cursor)
+        return list(records), str(to_version)

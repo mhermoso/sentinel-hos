@@ -1,20 +1,21 @@
-"""Ingestion repository — persists canonical HOS logs to PostgreSQL
-and caches active driver state in Redis.
+"""Ingestion repository — persists canonical HOS logs / GPS breadcrumbs
+to PostgreSQL and caches active driver state in Redis.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Set
+from datetime import datetime
+from typing import Dict, List, Optional, Set
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.redis import active_drivers_key, cursor_key, get_redis
-from app.core.security import hash_canonical_log
-from app.domains.ingestion.models import CanonicalHOSLogRecord
-from app.domains.ingestion.schemas import DCWCanonicalHOSLog
+from app.core.security import hash_canonical_log, hash_gps_breadcrumb
+from app.domains.ingestion.models import CanonicalHOSLogRecord, GpsBreadcrumbRecord
+from app.domains.ingestion.schemas import DCWCanonicalHOSLog, DCWGpsBreadcrumb
 
 logger = logging.getLogger("dcw.ingestion.repository")
 
@@ -70,6 +71,75 @@ class IngestionRepository:
         logger.info("Persisted %d/%d canonical HOS logs", inserted, len(logs))
         return inserted
 
+    async def persist_gps_breadcrumbs(
+        self,
+        crumbs: List[DCWGpsBreadcrumb],
+    ) -> int:
+        """Insert GPS breadcrumbs (append-only, dedup by tenant_id + raw_id)."""
+        if not crumbs:
+            return 0
+
+        inserted = 0
+        for crumb in crumbs:
+            crumb_dict = crumb.model_dump(mode="json")
+            inputs_hash = hash_gps_breadcrumb(crumb_dict)
+
+            stmt = pg_insert(GpsBreadcrumbRecord).values(
+                tenant_id=crumb.tenant_id,
+                device_id=crumb.device_id,
+                driver_id=crumb.driver_id,
+                raw_id=crumb.raw_id,
+                event_timestamp=crumb.event_timestamp,
+                latitude=crumb.latitude,
+                longitude=crumb.longitude,
+                speed_kmh=crumb.speed_kmh,
+                raw_payload=crumb.raw_payload,
+                inputs_hash=inputs_hash,
+            ).on_conflict_do_nothing(
+                index_elements=["tenant_id", "raw_id"],
+            )
+
+            result = await self.session.execute(stmt)
+            if result.rowcount:  # type: ignore[union-attr]
+                inserted += result.rowcount  # type: ignore[union-attr]
+
+        await self.session.flush()
+        logger.info("Persisted %d/%d GPS breadcrumbs", inserted, len(crumbs))
+        return inserted
+
+    async def resolve_driver_for_device(
+        self,
+        tenant_id: str,
+        device_id: str,
+        as_of: datetime,
+        cache: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """Resolve driver_id from latest HOS log for device at or before ``as_of``.
+
+        Falls back to ``unassigned:device:{device_id}``. Uses optional in-memory
+        ``cache`` keyed by device_id to limit queries within a poll batch.
+        """
+        if cache is not None and device_id in cache:
+            return cache[device_id]
+
+        stmt = (
+            select(CanonicalHOSLogRecord.driver_id)
+            .where(
+                CanonicalHOSLogRecord.tenant_id == tenant_id,
+                CanonicalHOSLogRecord.device_id == device_id,
+                CanonicalHOSLogRecord.event_timestamp <= as_of,
+            )
+            .order_by(CanonicalHOSLogRecord.event_timestamp.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        driver_id = result.scalar_one_or_none()
+        if driver_id:
+            if cache is not None:
+                cache[device_id] = driver_id
+            return driver_id
+        return f"unassigned:device:{device_id}"
+
     async def get_driver_timeline(
         self,
         tenant_id: str,
@@ -88,6 +158,89 @@ class IngestionRepository:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_gps_breadcrumbs_for_driver(
+        self,
+        tenant_id: str,
+        driver_id: str,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> List[GpsBreadcrumbRecord]:
+        """Fetch GPS breadcrumbs for a driver in ``[start_utc, end_utc)``."""
+        stmt = (
+            select(GpsBreadcrumbRecord)
+            .where(
+                GpsBreadcrumbRecord.tenant_id == tenant_id,
+                GpsBreadcrumbRecord.driver_id == driver_id,
+                GpsBreadcrumbRecord.event_timestamp >= start_utc,
+                GpsBreadcrumbRecord.event_timestamp < end_utc,
+            )
+            .order_by(GpsBreadcrumbRecord.event_timestamp.asc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def _distinct_device_ids_for_driver_day(
+        self,
+        tenant_id: str,
+        driver_id: str,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> List[str]:
+        """Return distinct non-null device IDs from a driver's HOS logs in a day window."""
+        stmt = (
+            select(CanonicalHOSLogRecord.device_id)
+            .where(
+                CanonicalHOSLogRecord.tenant_id == tenant_id,
+                CanonicalHOSLogRecord.driver_id == driver_id,
+                CanonicalHOSLogRecord.event_timestamp >= start_utc,
+                CanonicalHOSLogRecord.event_timestamp < end_utc,
+                CanonicalHOSLogRecord.device_id.isnot(None),
+            )
+            .distinct()
+        )
+        result = await self.session.execute(stmt)
+        return [device_id for device_id in result.scalars().all() if device_id]
+
+    async def get_gps_breadcrumbs_for_driver_day_route(
+        self,
+        tenant_id: str,
+        driver_id: str,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> List[GpsBreadcrumbRecord]:
+        """Fetch GPS breadcrumbs for a driver's day route.
+
+        Includes rows attributed to ``driver_id`` and crumbs on devices the driver
+        used that day (from HOS logs), so unassigned device trails still render.
+        Results are ordered by timestamp and deduplicated by ``raw_id``.
+        """
+        device_ids = await self._distinct_device_ids_for_driver_day(
+            tenant_id, driver_id, start_utc, end_utc
+        )
+        match_clauses = [GpsBreadcrumbRecord.driver_id == driver_id]
+        if device_ids:
+            match_clauses.append(GpsBreadcrumbRecord.device_id.in_(device_ids))
+
+        stmt = (
+            select(GpsBreadcrumbRecord)
+            .where(
+                GpsBreadcrumbRecord.tenant_id == tenant_id,
+                GpsBreadcrumbRecord.event_timestamp >= start_utc,
+                GpsBreadcrumbRecord.event_timestamp < end_utc,
+                or_(*match_clauses),
+            )
+            .order_by(GpsBreadcrumbRecord.event_timestamp.asc())
+        )
+        result = await self.session.execute(stmt)
+        seen_raw_ids: set[str] = set()
+        deduped: List[GpsBreadcrumbRecord] = []
+        for crumb in result.scalars().all():
+            if crumb.raw_id in seen_raw_ids:
+                continue
+            seen_raw_ids.add(crumb.raw_id)
+            deduped.append(crumb)
+        return deduped
 
     # ── Redis State Caching ──────────────────────────────────────────────
 

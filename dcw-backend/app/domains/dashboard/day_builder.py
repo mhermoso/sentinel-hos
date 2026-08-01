@@ -68,9 +68,24 @@ class RawHOSEvent:
     raw_id: str = ""
     device_id: Optional[str] = None
     annotation: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     # Geotab odometer in meters (stored historically as odometer_km)
     odometer_m: Optional[float] = None
     raw_payload: Optional[Mapping[str, Any]] = field(default=None, hash=False)
+
+
+@dataclass
+class _TimelinePoint:
+    ts: datetime
+    status: str
+    odometer_m: Optional[float]
+    origin: str = ""
+    annotation: Optional[str] = None
+    device_id: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    continued: bool = False
 
 
 def home_terminal_tz() -> ZoneInfo:
@@ -103,6 +118,13 @@ def format_duration_hhmm(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}"
 
 
+def format_duration_hms(seconds: float) -> str:
+    total = max(0, int(round(seconds)))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours}h {minutes}m {secs}s"
+
+
 def format_distance_mi(meters: float) -> str:
     miles = max(0.0, meters) / METERS_PER_MILE
     return f"{miles:.1f} mi"
@@ -114,6 +136,39 @@ def format_distance_km(meters: float) -> str:
 
 def _is_non_duty(event: RawHOSEvent) -> bool:
     return should_skip_duty_status_change(event.status, event.raw_payload)
+
+
+def _event_origin(event: RawHOSEvent) -> str:
+    payload = event.raw_payload or {}
+    origin = payload.get("origin")
+    return str(origin) if origin else ""
+
+
+def _location_label(
+    event: Optional[RawHOSEvent],
+    *,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+) -> str:
+    """Best-effort location string from Geotab payload or lat/lon."""
+    payload = (event.raw_payload if event else None) or {}
+    loc = payload.get("location")
+    if isinstance(loc, dict):
+        for key in ("address", "formattedAddress", "name", "description"):
+            val = loc.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        nested = loc.get("location")
+        if isinstance(nested, dict):
+            for key in ("address", "formattedAddress", "name"):
+                val = nested.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+    lat = latitude if latitude is not None else (event.latitude if event else None)
+    lon = longitude if longitude is not None else (event.longitude if event else None)
+    if lat is not None and lon is not None and not (lat == 0.0 and lon == 0.0):
+        return f"{lat:.4f}, {lon:.4f}"
+    return ""
 
 
 def compute_status_totals(
@@ -172,6 +227,62 @@ def compute_status_totals(
     return totals
 
 
+def _clip_continued_odometer_to_day_start(
+    timeline: List[_TimelinePoint],
+    carry_event: Optional[RawHOSEvent],
+) -> None:
+    """Interpolate odometer at local midnight for carry-forward segments.
+
+    Without this, ``next_odo - carry_odo`` spans the full pre-day→next interval
+    while the row duration is only ``[day_start, next)``.
+    """
+    if (
+        not timeline
+        or not timeline[0].continued
+        or carry_event is None
+        or len(timeline) < 2
+    ):
+        return
+    point = timeline[0]
+    nxt = timeline[1]
+    carry_odo = point.odometer_m
+    next_odo = nxt.odometer_m
+    if carry_odo is None or next_odo is None or next_odo < carry_odo:
+        return
+    carry_ts = _ensure_utc(carry_event.event_timestamp)
+    next_ts = nxt.ts
+    span = (next_ts - carry_ts).total_seconds()
+    if span <= 0:
+        return
+    into = (point.ts - carry_ts).total_seconds()
+    if into <= 0:
+        return
+    if into >= span:
+        point.odometer_m = next_odo
+        return
+    point.odometer_m = carry_odo + (next_odo - carry_odo) * (into / span)
+
+
+def _timeline_point_from_event(
+    ts: datetime,
+    event: RawHOSEvent,
+    *,
+    odometer_m: Optional[float] = None,
+    continued: bool = False,
+) -> _TimelinePoint:
+    return _TimelinePoint(
+        ts=ts,
+        status=event.status,
+        odometer_m=odometer_m if odometer_m is not None else event.odometer_m,
+        origin=_event_origin(event),
+        annotation=event.annotation,
+        device_id=event.device_id,
+        latitude=event.latitude,
+        longitude=event.longitude,
+        continued=continued,
+    )
+
+
 def build_day_points(
     events: Sequence[RawHOSEvent],
     bounds: DayBounds,
@@ -190,6 +301,7 @@ def build_day_points(
     carry_any: Optional[str] = None
     carry_duty: Optional[str] = None
     carry_odo: Optional[float] = None
+    carry_event: Optional[RawHOSEvent] = None
     day_events: List[RawHOSEvent] = []
 
     for event in sorted_events:
@@ -198,6 +310,7 @@ def build_day_points(
             carry_any = event.status
             if not _is_non_duty(event):
                 carry_duty = event.status
+                carry_event = event
                 if event.odometer_m is not None:
                     carry_odo = event.odometer_m
         elif ts < end:
@@ -206,37 +319,65 @@ def build_day_points(
     # Prefer last real duty status before the day (skip trailing UNKNOWN noise)
     carry = carry_duty if carry_duty is not None else carry_any
 
-    # Timeline: (ts, status, odometer_m at this point)
-    timeline: List[Tuple[datetime, str, Optional[float]]] = []
+    timeline: List[_TimelinePoint] = []
     if carry is not None:
-        timeline.append((start, carry, carry_odo))
+        if carry_event is not None and carry_event.status == carry:
+            timeline.append(
+                _timeline_point_from_event(
+                    start, carry_event, odometer_m=carry_odo, continued=True
+                )
+            )
+        else:
+            timeline.append(
+                _TimelinePoint(
+                    ts=start,
+                    status=carry,
+                    odometer_m=carry_odo,
+                    continued=True,
+                )
+            )
     for event in day_events:
         if _is_non_duty(event):
             continue
         ts = _ensure_utc(event.event_timestamp)
         odo = event.odometer_m
-        if timeline and timeline[-1][0] == ts:
-            timeline[-1] = (ts, event.status, odo if odo is not None else timeline[-1][2])
+        if timeline and timeline[-1].ts == ts:
+            prev = timeline[-1]
+            timeline[-1] = _timeline_point_from_event(
+                ts,
+                event,
+                odometer_m=odo if odo is not None else prev.odometer_m,
+                continued=False,
+            )
         else:
-            # Prefer event odometer; else carry last known
             if odo is None and timeline:
-                odo = timeline[-1][2]
-            timeline.append((ts, event.status, odo))
+                odo = timeline[-1].odometer_m
+            timeline.append(
+                _timeline_point_from_event(ts, event, odometer_m=odo, continued=False)
+            )
 
-    totals = compute_status_totals(timeline, end)
+    # Carry-forward points reuse the pre-midnight odometer sample. Clip that
+    # reading to the day boundary so overnight miles are not attributed to the
+    # short post-midnight "(Continued)" slice (e.g. 68 mi in 3 minutes).
+    _clip_continued_odometer_to_day_start(timeline, carry_event)
+
+    totals = compute_status_totals(
+        [(p.ts, p.status, p.odometer_m) for p in timeline],
+        end,
+    )
 
     grid_events: List[Dict[str, Any]] = []
-    for idx, (ts, status, odo) in enumerate(timeline):
-        next_ts = timeline[idx + 1][0] if idx + 1 < len(timeline) else end
-        next_odo = timeline[idx + 1][2] if idx + 1 < len(timeline) else None
-        duration = max(0.0, (next_ts - ts).total_seconds())
+    for idx, point in enumerate(timeline):
+        next_ts = timeline[idx + 1].ts if idx + 1 < len(timeline) else end
+        next_odo = timeline[idx + 1].odometer_m if idx + 1 < len(timeline) else None
+        duration = max(0.0, (next_ts - point.ts).total_seconds())
         dist_m = 0.0
-        if odo is not None and next_odo is not None and next_odo >= odo:
-            dist_m = next_odo - odo
-        lane = LANE_FOR_STATUS.get(status)
+        if point.odometer_m is not None and next_odo is not None and next_odo >= point.odometer_m:
+            dist_m = next_odo - point.odometer_m
+        lane = LANE_FOR_STATUS.get(point.status)
         if lane is None:
             continue
-        local_ts = ts.astimezone(ZoneInfo(bounds.timezone))
+        local_ts = point.ts.astimezone(ZoneInfo(bounds.timezone))
         local_end = next_ts.astimezone(ZoneInfo(bounds.timezone))
         hour_of_day = (
             local_ts.hour
@@ -246,22 +387,87 @@ def build_day_points(
         )
         grid_events.append(
             {
-                "status": status,
+                "status": point.status,
                 "lane": lane,
-                "event_timestamp": ts,
+                "event_timestamp": point.ts,
                 "local_timestamp": local_ts.isoformat(),
                 "local_end_timestamp": local_end.isoformat(),
                 "hour_of_day": hour_of_day,
                 "duration_seconds": duration,
                 "duration_hhmm": format_duration_hhmm(duration),
+                "duration_hms": format_duration_hms(duration),
                 "distance_m": dist_m,
                 "distance_mi": round(dist_m / METERS_PER_MILE, 2),
                 "distance_km": round(dist_m / 1000.0, 2),
                 "distance_label": format_distance_mi(dist_m) if dist_m > 0 else "",
+                "origin": point.origin,
+                "annotation": point.annotation,
+                "device_id": point.device_id,
+                "latitude": point.latitude,
+                "longitude": point.longitude,
+                "location_label": _location_label(
+                    None,
+                    latitude=point.latitude,
+                    longitude=point.longitude,
+                ),
+                "continued": point.continued,
+                "alerts": [],
             }
         )
 
+    # Enrich from source events (payload address beats bare lat/lon)
+    event_by_ts: Dict[datetime, RawHOSEvent] = {}
+    for event in day_events:
+        if _is_non_duty(event):
+            continue
+        event_by_ts[_ensure_utc(event.event_timestamp)] = event
+    if carry_event is not None and carry_event.status == carry:
+        event_by_ts[start] = carry_event
+
+    for ev in grid_events:
+        src = event_by_ts.get(_ensure_utc(ev["event_timestamp"]))
+        if src is None:
+            continue
+        ev["origin"] = _event_origin(src) or ev.get("origin") or ""
+        if src.annotation is not None:
+            ev["annotation"] = src.annotation
+        if src.device_id is not None:
+            ev["device_id"] = src.device_id
+        if src.latitude is not None:
+            ev["latitude"] = src.latitude
+        if src.longitude is not None:
+            ev["longitude"] = src.longitude
+        label = _location_label(src)
+        if label:
+            ev["location_label"] = label
+
     return grid_events, totals, carry
+
+
+def attach_alerts_to_segments(
+    grid_events: List[Dict[str, Any]],
+    markers: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Attach markers whose ``as_of`` falls in ``[segment_start, segment_end)``."""
+    for ev in grid_events:
+        start = _ensure_utc(ev["event_timestamp"])
+        end = start + timedelta(seconds=float(ev.get("duration_seconds", 0.0)))
+        alerts: List[Dict[str, Any]] = []
+        for marker in markers:
+            as_of = _ensure_utc(marker["as_of"])
+            if start <= as_of < end:
+                alerts.append(
+                    {
+                        "as_of": as_of,
+                        "violation_type": str(marker.get("violation_type", "")),
+                        "severity": str(marker.get("severity", "")),
+                        "rule_ref": str(marker.get("rule_ref", "")),
+                        "description": str(marker.get("description", "")),
+                        "source": str(marker.get("source", "")),
+                    }
+                )
+        ev["alerts"] = alerts
+    return grid_events
 
 
 def load_backtest_dispatches(

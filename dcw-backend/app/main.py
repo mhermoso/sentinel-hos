@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import close_db, init_db
+from app.core.ops_log import configure_ops_log
 from app.core.redis import close_redis, init_redis
 from app.domains.dashboard.router import router as dashboard_router
 from app.domains.dashboard.ui import ui_router
@@ -65,6 +66,7 @@ async def on_startup() -> None:
     """Initialize database, Redis, and start the alert subscriber."""
     global _subscriber_task
 
+    configure_ops_log(process_name="api")
     logger.info("Starting DCW application (environment=%s)", settings.ENVIRONMENT)
 
     await init_db()

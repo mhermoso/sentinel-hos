@@ -1,6 +1,6 @@
 ---
 description: FastAPI router, dependency injection, and service patterns
-globs: dcw-backend/app/domains/**/router.py,dcw-backend/app/main.py
+globs: dcw-backend/app/domains/**/router.py,dcw-backend/app/domains/**/ui.py,dcw-backend/app/main.py
 alwaysApply: false
 ---
 
@@ -16,10 +16,11 @@ async def health_check(session: AsyncSession = Depends(get_session)) -> HealthRe
     ...
 ```
 
-- Always declare `response_model=` on endpoints
+- Always declare `response_model=` on JSON endpoints
 - Use `Depends(get_session)` for DB, `Depends(get_redis())` for Redis
 - Use `Query()` with `le`/`ge` bounds for pagination and filters
 - Raise `HTTPException` with `status.HTTP_*` constants for errors
+- HTMX UI lives on `ui_router` (`/ui`); keep HTML helpers in `dashboard/ui.py` and related modules
 
 ## Schema Separation
 
@@ -31,7 +32,7 @@ async def health_check(session: AsyncSession = Depends(get_session)) -> HealthRe
 
 | Process | Entry | Responsibility |
 |---------|-------|----------------|
-| API server | `make dev` → uvicorn `app.main:app` | REST + notifier subscriber on startup |
+| API server | `make dev` → uvicorn `app.main:app` | REST + HTMX UI + notifier subscriber on startup |
 | ARQ worker | `make worker` → `WorkerSettings` | Ingestion poll + compliance sweep |
 
 ## SaaS Tier Gating

@@ -23,7 +23,13 @@ class BaseTelematicsAdapter(ABC):
     async def fetch_feed(self, tenant_id: str, from_cursor: str) -> Tuple[List[DCWCanonicalHOSLog], str]: ...
 ```
 
-Implementations: `geotab.py`, `motive.py`, `samsara.py`. Map provider payloads to `DCWCanonicalHOSLog` inside the adapter.
+| Provider | File | Status |
+|----------|------|--------|
+| Geotab | `geotab.py` | Implemented (DutyStatusLog + LogRecord GPS; live + history) |
+| Motive | `motive.py` | Stub (`NotImplementedError`) |
+| Samsara | `samsara.py` | Stub (`NotImplementedError`) |
+
+Map provider HOS payloads to `DCWCanonicalHOSLog` and GPS to `DCWGpsBreadcrumb` (ADR-007) inside the adapter. Do not add new code to root `geotab_ingestor.py` — use `dcw-backend/`.
 
 ## Normalization (ADR-003)
 
@@ -31,18 +37,21 @@ Before persistence, the normalizer must:
 
 1. Truncate timestamps to 1-second precision (drop sub-second noise)
 2. Round GPS coordinates to 4 decimal places (~11.1 m)
-3. Apply Zero-Order Hold (ZOH) forward-fill across gaps
-4. Override ambiguous off-duty to `DRIVING` when vehicle speed > 5 mph (ECM precedence)
+3. Override ambiguous off-duty to `DRIVING` when vehicle speed > 5 mph (ECM precedence)
+4. Sanitize sensitive keys from raw JSONB payloads
+
+Zero-Order Hold (ZOH) forward-fill across gaps is specified in `end-to-end.md` but not yet implemented — add it in the normalizer when closing that gap.
 
 ## Integrity & Persistence
 
 - Compute SHA-256 digest over normalized inputs via `app/core/security.py` before writing
-- Append to `canonical_hos_logs` only — never update or delete
+- Append to `canonical_hos_logs` and `gps_breadcrumbs` only — never update or delete
 - Store raw provider JSONB alongside canonical fields
 - Update Redis: active driver set, polling cursors (`cursor:{provider}:{tenant_id}`)
+- GPS LogRecord cursor: `cursor:geotab-logrecord:{tenant_id}` (separate from DutyStatusLog)
 
 ## Background Worker
 
 - ARQ worker config: `WorkerSettings` in `poller.py`
-- Cron: `poll_geotab_feed` every 2 min, `sweep_active_drivers` for compliance
-- Use httpx connection pooling for provider HTTP calls
+- Cron: `poll_geotab_feed`, `poll_geotab_log_records` (~2 min), `sweep_active_drivers` for compliance
+- Use httpx / mygeotab connection pooling for provider HTTP calls

@@ -12,7 +12,7 @@
 {% block content %}
 <section class="page-head">
   <h1>Home</h1>
-  <p class="lede">Fleet map, last-30-day alert summary, and recent notification dispatches.</p>
+  <p class="lede">Fleet map, last-30-day alert summary, and live Geotab ingestion feed.</p>
 </section>
 
 <section class="home-summary">
@@ -30,70 +30,166 @@
 
 <section class="panel">
   <div class="panel-meta">
-    <span>{{ positions|length }} drivers with location</span>
+    <span id="home-map-visible-count">{{ positions|length }} drivers with location</span>
     <span>{{ no_location|length }} without coordinates</span>
+    <button type="button" id="home-map-clear-filters" class="map-clear-filters" hidden>Clear filters</button>
   </div>
-  <div id="home-map" class="home-map" role="img" aria-label="Driver locations map"
-       data-positions='{{ positions_json | tojson }}'></div>
-  {% if no_location %}
-  <div class="no-location">
-    <h2>No location</h2>
-    <ul>
-      {% for d in no_location %}
+  <div class="home-map-wrap">
+    <div id="home-map" class="home-map" role="img" aria-label="Driver locations map"
+         data-display-tz="{{ timezone }}"
+         data-positions='{{ positions_json | tojson }}'></div>
+    <ul class="map-legend" aria-label="Map legend filters">
       <li>
-        <a href="/ui/drivers/{{ d.driver_id }}?date={{ today }}">{{ d.driver_name or d.driver_id }}</a>
-        <span class="muted mono">{{ d.driver_id }}</span>
-        {% if d.current_status %}<span class="badge hist">{{ d.current_status }}</span>{% endif %}
+        <button type="button" class="map-legend-btn" data-filter-status="OFF" aria-pressed="false">
+          <span class="hos-marker status-off" aria-hidden="true"></span>
+          OFF / PC
+        </button>
       </li>
+      <li>
+        <button type="button" class="map-legend-btn" data-filter-status="SB" aria-pressed="false">
+          <span class="hos-marker status-sb" aria-hidden="true"></span>
+          SB
+        </button>
+      </li>
+      <li>
+        <button type="button" class="map-legend-btn" data-filter-status="D" aria-pressed="false">
+          <span class="hos-marker status-d" aria-hidden="true"></span>
+          D
+        </button>
+      </li>
+      <li>
+        <button type="button" class="map-legend-btn" data-filter-status="ON" aria-pressed="false">
+          <span class="hos-marker status-on" aria-hidden="true"></span>
+          ON / YM
+        </button>
+      </li>
+      <li>
+        <button type="button" class="map-legend-btn" data-filter-status="UNKNOWN" aria-pressed="false">
+          <span class="hos-marker status-unknown" aria-hidden="true"></span>
+          UNKNOWN
+        </button>
+      </li>
+      <li>
+        <button type="button" class="map-legend-btn" data-filter-alert="warn" aria-pressed="false">
+          <span class="hos-marker-badge warn" aria-hidden="true">W</span>
+          Warning (30d)
+        </button>
+      </li>
+      <li>
+        <button type="button" class="map-legend-btn" data-filter-alert="viol" aria-pressed="false">
+          <span class="hos-marker-badge viol" aria-hidden="true">V</span>
+          Violation (30d)
+        </button>
+      </li>
+    </ul>
+  </div>
+  {% if positions %}
+  <div class="map-drivers-wrap">
+    <div class="map-drivers-label">
+      <span>Located drivers · click to zoom</span>
+      <button type="button" id="home-map-named-only" class="map-filter-toggle is-active"
+              aria-pressed="true" data-filter-named="1">Named only</button>
+    </div>
+    <ul id="home-map-drivers" class="map-drivers" aria-label="Drivers with location">
+      {% for p in positions %}
+      {% if not (p.latitude == 0 and p.longitude == 0) %}
+      {% set st = (p.status or 'UNKNOWN')|upper %}
+      {% if st == 'PC' %}{% set sk = 'OFF' %}
+      {% elif st == 'YM' %}{% set sk = 'ON' %}
+      {% elif st in ['OFF', 'SB', 'D', 'ON', 'UNKNOWN'] %}{% set sk = st %}
+      {% else %}{% set sk = 'UNKNOWN' %}{% endif %}
+      {% if sk == 'OFF' %}{% set sc = 'status-off' %}
+      {% elif sk == 'SB' %}{% set sc = 'status-sb' %}
+      {% elif sk == 'D' %}{% set sc = 'status-d' %}
+      {% elif sk == 'ON' %}{% set sc = 'status-on' %}
+      {% else %}{% set sc = 'status-unknown' %}{% endif %}
+      <li>
+        <button type="button" class="map-driver-row" data-focus-driver="{{ p.driver_id }}"
+                data-status-key="{{ sk }}"{% if p.driver_name %} data-has-name="1"{% else %} data-has-name="0"{% endif %}>
+          <span class="hos-marker {{ sc }}" aria-hidden="true"></span>
+          <span class="map-driver-text">
+            <span class="map-driver-name">{{ p.driver_name or p.driver_id }}</span>
+            {% if p.driver_name %}<span class="muted mono map-driver-id">{{ p.driver_id }}</span>{% endif %}
+          </span>
+          {% if p.warning_count and p.warning_count > 0 %}
+          <span class="hos-marker-badge warn" title="{{ p.warning_count }}W">W</span>
+          {% endif %}
+          {% if p.violation_count and p.violation_count > 0 %}
+          <span class="hos-marker-badge viol" title="{{ p.violation_count }}V">V</span>
+          {% endif %}
+        </button>
+      </li>
+      {% endif %}
       {% endfor %}
     </ul>
   </div>
+  {% endif %}
+  {% if no_location %}
+  <details class="no-location">
+    <summary>No location · {{ no_location|length }} driver{{ "s" if no_location|length != 1 else "" }}</summary>
+    <div class="no-location-grid">
+      {% for d in no_location %}
+      <a class="no-location-item" href="/ui/drivers/{{ d.driver_id }}?date={{ today }}">
+        {% if d.driver_name %}
+        <span class="no-location-name">{{ d.driver_name }}</span>
+        <span class="muted mono no-location-id">{{ d.driver_id }}</span>
+        {% else %}
+        <span class="mono no-location-id">{{ d.driver_id }}</span>
+        {% endif %}
+        {% if d.current_status %}<span class="badge hist">{{ d.current_status }}</span>{% endif %}
+      </a>
+      {% endfor %}
+    </div>
+  </details>
   {% endif %}
 </section>
 
 <section class="panel">
   <div class="panel-meta">
-    <span>Latest notifications</span>
-    <span class="hint">From alert JSONL log · no live Twilio calls</span>
+    <span>Live Geotab feed</span>
+    <span class="hint">Newest HOS logs by ingested_at · times in {{ tz_abbrev or timezone }} · refreshes every 5s</span>
   </div>
-  <table class="alerts-table dispatch-table">
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Driver</th>
-        <th>Severity</th>
-        <th>Channel</th>
-        <th>Action</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% if dispatch_events %}
-      {% for e in dispatch_events %}
-      <tr>
-        <td class="mono">{{ e.timestamp or '—' }}</td>
-        <td>
-          <strong>{{ e.driver_name or e.driver_id }}</strong>
-          <div class="muted small">{{ e.driver_id }}</div>
-        </td>
-        <td><span class="sev sev-{{ e.severity }}">{{ e.severity or '—' }}</span></td>
-        <td class="mono">{{ e.channel }}</td>
-        <td class="mono">{{ e.dispatch_action }}</td>
-        <td class="desc">{{ e.description }}</td>
-      </tr>
-      {% endfor %}
-      {% else %}
-      <tr>
-        <td colspan="6" class="muted">No dispatch log entries yet.</td>
-      </tr>
-      {% endif %}
-    </tbody>
-  </table>
+  <div id="home-geotab-feed"
+       hx-get="/ui/home/feed"
+       hx-trigger="every 5s"
+       hx-swap="innerHTML"
+       hx-on::response-error="window.GeotabFeed && window.GeotabFeed.onError(event)">
+    {% include "partials/geotab_feed.html" with context %}
+  </div>
 </section>
 {% endblock %}
 
 {% block scripts %}
 <script>
   window.HomeMap && window.HomeMap.mount();
+
+  window.GeotabFeed = {
+    highlightNewest() {
+      const root = document.querySelector("#home-geotab-feed .geotab-feed");
+      if (!root) return;
+      const newest = root.getAttribute("data-newest-raw-id") || "";
+      const key = "dcw.geotabFeed.newestRawId";
+      let prev = null;
+      try { prev = sessionStorage.getItem(key); } catch (e) {}
+      if (newest && prev && newest !== prev) {
+        const row = root.querySelector(".feed-row.is-newest");
+        if (row) row.classList.add("is-new");
+      }
+      if (newest) {
+        try { sessionStorage.setItem(key, newest); } catch (e) {}
+      }
+    },
+    onError(event) {
+      const host = document.getElementById("home-geotab-feed");
+      if (!host || host.querySelector(".geotab-feed")) return;
+      host.innerHTML = '<p class="muted">Feed unavailable — check server logs and refresh.</p>';
+    },
+  };
+  window.GeotabFeed.highlightNewest();
+  document.body.addEventListener("htmx:afterSwap", (ev) => {
+    if (ev.target && ev.target.id === "home-geotab-feed") {
+      window.GeotabFeed.highlightNewest();
+    }
+  });
 </script>
 {% endblock %}

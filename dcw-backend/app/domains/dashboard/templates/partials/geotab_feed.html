@@ -1,0 +1,86 @@
+{# Accept events/newest_raw_id from HTMX partial or feed_events/feed_newest_raw_id from home SSR. #}
+{% set _events = events if events is defined else feed_events %}
+{% set _newest_raw_id = newest_raw_id if newest_raw_id is defined else feed_newest_raw_id %}
+<div class="geotab-feed" data-newest-raw-id="{{ _newest_raw_id or '' }}">
+  <table class="alerts-table geotab-feed-table"
+         data-sortable
+         data-sort-storage="dcw.geotabFeed.sort"
+         data-default-sort="ingested"
+         data-default-dir="desc">
+    <thead>
+      <tr>
+        <th data-sort-key="ingested" data-sort-as="time" aria-sort="descending">
+          <button type="button" class="sort-btn" data-label="Ingested">Ingested</button>
+        </th>
+        <th data-sort-key="event" data-sort-as="time" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Event">Event</button>
+        </th>
+        <th data-sort-key="driver" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Driver">Driver</button>
+        </th>
+        <th data-sort-key="status" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Status">Status</button>
+        </th>
+        <th data-sort-key="device" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Device">Device</button>
+        </th>
+        <th data-sort-key="location" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Location">Location</button>
+        </th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if _events %}
+      {% for e in _events %}
+      <tr class="feed-row{% if loop.first %} is-newest{% endif %}"
+          data-raw-id="{{ e.raw_id }}"
+          data-sortable-row
+          data-sort-ingested="{{ e.ingested_at.isoformat() if e.ingested_at else '' }}"
+          data-sort-event="{{ e.event_timestamp.isoformat() if e.event_timestamp else '' }}"
+          data-sort-driver="{{ (e.driver_name or e.driver_id)|lower }}|{{ e.driver_id|lower }}"
+          data-sort-status="{{ e.status|lower }}"
+          data-sort-device="{{ (e.device_id or '')|lower }}"
+          data-sort-location="{% if e.latitude is not none and e.longitude is not none %}{{ '%.4f'|format(e.latitude) }},{{ '%.4f'|format(e.longitude) }}{% endif %}">
+        <td class="mono">{{ e.ingested_at | local_dt(timezone) }}</td>
+        <td class="mono">{{ e.event_timestamp | local_dt(timezone) }}</td>
+        <td>
+          <strong>{{ e.driver_name or e.driver_id }}</strong>
+          <div class="muted small">{{ e.driver_id }}</div>
+        </td>
+        <td><span class="feed-status status-{{ e.status }}">{{ e.status }}</span></td>
+        <td class="mono">{{ e.device_id or '—' }}</td>
+        <td class="mono muted">
+          {% if e.latitude is not none and e.longitude is not none %}
+          {{ '%.4f'|format(e.latitude) }}, {{ '%.4f'|format(e.longitude) }}
+          {% else %}
+          —
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr>
+        <td colspan="6" class="muted">No Geotab HOS logs ingested yet.</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+<script>
+(function () {
+  var root = document.querySelector("#home-geotab-feed .geotab-feed");
+  if (!root) return;
+  var newest = root.getAttribute("data-newest-raw-id") || "";
+  var key = "dcw.geotabFeed.newestRawId";
+  var prev = null;
+  try { prev = sessionStorage.getItem(key); } catch (e) {}
+  if (newest && prev && newest !== prev) {
+    var row = root.querySelector(".feed-row.is-newest");
+    if (row) row.classList.add("is-new");
+  }
+  if (newest) {
+    try { sessionStorage.setItem(key, newest); } catch (e) {}
+  }
+  window.SortableTables && window.SortableTables.bind(root);
+})();
+</script>

@@ -12,17 +12,16 @@ alwaysApply: false
 - Run: `make test` (full suite) or `make test-billing` (single module)
 - CI uses ephemeral Postgres 16 + Redis 7.2 — set `DATABASE_URL` and `REDIS_URL`
 
-## Test Structure (planned layout)
+## Test Structure (current)
 
 ```
 tests/
 ├── conftest.py              # Shared fixtures (async session, redis, settings)
-├── unit/                    # Per-rule, normalizer, billing gate tests
-├── fixtures/
-│   ├── golden/              # Versioned with rule pack — primary engine contract
-│   └── providers/           # Anonymized real telematics data
-└── integration/             # Adapter + DB + API (future)
+├── unit/                    # Engine, billing, ingestion, dashboard helpers
+└── fixtures/                # Planned: golden/ + providers/ (not required yet)
 ```
+
+Current unit coverage includes billing gates, Geotab status map, duty filter, PC rest, 34h restart/weekly, day builder, alert detail/filters, and backtest replay.
 
 ## Patterns
 
@@ -37,5 +36,5 @@ async def test_starter_tier_blocks_voice_ivr():
 
 - Mark async tests with `@pytest.mark.asyncio`
 - Import directly from `app.*` — no test-only wrappers
-- Engine golden diffs block merge; coverage % is secondary to golden correctness
 - Engine changes require edge-case unit tests per `CONTRIBUTING.md`
+- When golden fixtures are added, golden diffs block merge; coverage % remains secondary to correctness

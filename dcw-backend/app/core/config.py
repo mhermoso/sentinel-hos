@@ -69,6 +69,12 @@ class Settings(BaseSettings):
         description="When true, log alerts but skip Twilio dispatch",
     )
 
+    # ── Ops event log (dashboard Logs page) ──────────────────────────────
+    OPS_LOG_PATH: str = Field(
+        default="logs/ops-events.log",
+        description="Append-only JSONL sink for dcw.* operational log events",
+    )
+
     # ── Stripe Billing ───────────────────────────────────────────────────
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""

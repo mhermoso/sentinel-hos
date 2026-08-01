@@ -10,7 +10,7 @@ Regulatory laws change over time. Calculations must produce identical outputs wh
 
 ## Decision
 
-Compliance rule sets are packaged as versioned **Rule Packs** following Semantic Versioning (e.g., `fmcsa-us-property@1.2.0`). Every generated audit record binds the inputs hash to the specific rule pack version executed.
+Compliance rule sets are packaged as versioned **Rule Packs** following Semantic Versioning (e.g., `fmcsa-us-property@1.3.0`). Every generated audit record binds the inputs hash to the specific rule pack version executed. The active default is configured via `DEFAULT_RULE_PACK_VERSION` in `app/core/config.py`.
 
 ## Consequences
 

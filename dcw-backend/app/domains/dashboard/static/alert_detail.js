@@ -132,6 +132,89 @@
     return padTop + (idx * usable) / (STATUSES.length - 1);
   }
 
+  function formatContextAxisLabel(offsetHours) {
+    if (offsetHours === 0) return "0";
+    const h = Math.round(offsetHours);
+    return h > 0 ? `+${h}h` : `${h}h`;
+  }
+
+  function drawContextTimeAxis(svg, ns, opts) {
+    const {
+      width,
+      height,
+      padL,
+      padR,
+      padTop,
+      padBottom,
+      beforeHours,
+      afterHours,
+    } = opts;
+    const usable = width - padL - padR;
+    const totalHours = beforeHours + afterHours;
+    const tickStep = 2;
+
+    const axisLine = document.createElementNS(ns, "line");
+    axisLine.setAttribute("x1", padL);
+    axisLine.setAttribute("x2", width - padR);
+    axisLine.setAttribute("y1", height - padBottom);
+    axisLine.setAttribute("y2", height - padBottom);
+    axisLine.setAttribute("stroke", "#2a3644");
+    axisLine.setAttribute("stroke-width", "1");
+    svg.appendChild(axisLine);
+
+    for (let offset = -beforeHours; offset <= afterHours; offset += tickStep) {
+      const frac = (offset + beforeHours) / totalHours;
+      const x = padL + frac * usable;
+      const major = offset % 4 === 0 || offset === 0;
+
+      const tick = document.createElementNS(ns, "line");
+      tick.setAttribute("x1", x);
+      tick.setAttribute("x2", x);
+      tick.setAttribute("y1", padTop - 4);
+      tick.setAttribute("y2", height - padBottom + 4);
+      tick.setAttribute("stroke", major ? "#2a3644" : "#1a2430");
+      tick.setAttribute("stroke-width", "1");
+      svg.appendChild(tick);
+
+      const label = document.createElementNS(ns, "text");
+      label.setAttribute("x", x);
+      label.setAttribute("y", height - 6);
+      label.setAttribute("fill", offset === 0 ? "#8b9aab" : "#6b7a8a");
+      label.setAttribute("font-size", "10");
+      label.setAttribute("font-family", "IBM Plex Mono, monospace");
+      label.setAttribute("text-anchor", "middle");
+      label.textContent = formatContextAxisLabel(offset);
+      svg.appendChild(label);
+    }
+
+    // Guard against fractional window sizes (e.g. custom before/after hours).
+    const endOffset = afterHours;
+    if (endOffset % tickStep !== 0) {
+      const frac = 1;
+      const x = padL + frac * usable;
+      const tick = document.createElementNS(ns, "line");
+      tick.setAttribute("x1", x);
+      tick.setAttribute("x2", x);
+      tick.setAttribute("y1", padTop - 4);
+      tick.setAttribute("y2", height - padBottom + 4);
+      tick.setAttribute("stroke", "#2a3644");
+      tick.setAttribute("stroke-width", "1");
+      svg.appendChild(tick);
+
+      const label = document.createElementNS(ns, "text");
+      label.setAttribute("x", x);
+      label.setAttribute("y", height - 6);
+      label.setAttribute("fill", "#6b7a8a");
+      label.setAttribute("font-size", "10");
+      label.setAttribute("font-family", "IBM Plex Mono, monospace");
+      label.setAttribute("text-anchor", "middle");
+      label.textContent = formatContextAxisLabel(endOffset);
+      svg.appendChild(label);
+    }
+
+    return { usable };
+  }
+
   function renderContext(host, payload) {
     if (!payload) return;
     const width = 520;
@@ -139,7 +222,9 @@
     const padL = 36;
     const padR = 10;
     const padTop = 14;
-    const padBottom = 22;
+    const padBottom = 26;
+    const beforeHours = payload.before_hours != null ? payload.before_hours : 6;
+    const afterHours = payload.after_hours != null ? payload.after_hours : 2;
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -171,7 +256,18 @@
       svg.appendChild(label);
     });
 
-    const usable = width - padL - padR;
+    const frac = payload.as_of_fraction != null ? payload.as_of_fraction : 0.75;
+    const axis = drawContextTimeAxis(svg, ns, {
+      width,
+      height,
+      padL,
+      padR,
+      padTop,
+      padBottom,
+      beforeHours,
+      afterHours,
+    });
+    const usable = axis.usable;
     const events = payload.events || [];
     // Highlight bands under the step line for causal segments
     events.forEach((ev) => {
@@ -212,7 +308,6 @@
       svg.appendChild(path);
     }
 
-    const frac = payload.as_of_fraction != null ? payload.as_of_fraction : 0.75;
     const ax = padL + frac * usable;
     const alertLine = document.createElementNS(ns, "line");
     alertLine.setAttribute("x1", ax);
@@ -242,16 +337,6 @@
     diamond.setAttribute("fill", "#e85d5d");
     svg.appendChild(diamond);
 
-    const caption = document.createElementNS(ns, "text");
-    caption.setAttribute("x", ax);
-    caption.setAttribute("y", height - 6);
-    caption.setAttribute("fill", "#e85d5d");
-    caption.setAttribute("font-size", "9");
-    caption.setAttribute("text-anchor", "middle");
-    caption.setAttribute("font-family", "IBM Plex Mono, monospace");
-    caption.textContent = "alert";
-    svg.appendChild(caption);
-
     host.innerHTML = "";
     host.appendChild(svg);
   }
@@ -279,10 +364,18 @@
   function mount(root) {
     const scope = root || document;
     scope.querySelectorAll("[data-alert-gauges]").forEach((host) => {
-      renderGauges(host, parseJsonHost(host));
+      if (host.dataset.mounted === "1") return;
+      const clocks = parseJsonHost(host);
+      if (!clocks) return;
+      renderGauges(host, clocks);
+      host.dataset.mounted = "1";
     });
     scope.querySelectorAll("[data-alert-context]").forEach((host) => {
-      renderContext(host, parseJsonHost(host));
+      if (host.dataset.mounted === "1") return;
+      const payload = parseJsonHost(host);
+      if (!payload) return;
+      renderContext(host, payload);
+      host.dataset.mounted = "1";
     });
     bindMarkerButtons(scope);
   }
@@ -361,9 +454,15 @@
     if (ev.key === "Escape") handleEscape();
   });
 
+  // Full-page view loads this script with defer. Inline template calls to
+  // mount() during HTML parse run before AlertDetail exists — so always
+  // mount once this file has defined the API.
+  function boot() {
+    mount();
+  }
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => bindMarkerButtons());
+    document.addEventListener("DOMContentLoaded", boot);
   } else {
-    bindMarkerButtons();
+    boot();
   }
 })();

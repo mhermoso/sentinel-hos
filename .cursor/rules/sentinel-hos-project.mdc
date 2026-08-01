@@ -5,11 +5,20 @@ alwaysApply: true
 
 # Sentinel HOS — Project Context
 
-**Product:** FMCSA 49 CFR Part 395 Hours-of-Service compliance platform (deterministic, auditable).
+**Product:** FMCSA 49 CFR Part 395 Hours-of-Service compliance platform (deterministic, auditable). Also referred to as Driver Compliance Watch (DCW).
 
 **Primary app:** `dcw-backend/` — Python 3.12, FastAPI, Pydantic v2, PostgreSQL 16, Redis 7.2. No TypeScript in this repo.
 
 **Architecture reference:** `end-to-end.md` and `dcw-backend/docs/adrs/`. ADRs are binding.
+
+## Current maturity (as of 2026-07-30)
+
+- Modular monolith scaffold + ADRs 001–007 in place
+- Geotab ingestion live (DutyStatusLog + LogRecord GPS breadcrumbs); Motive/Samsara adapters are stubs
+- Engine rule pack `fmcsa-us-property@1.3.0` with sweeper, replay/backtest, unit tests
+- Notifier (Twilio Voice/SMS + alert locks) and HTMX dashboard operational locally
+- Driver-day GPS route map (drawer / full page) available when breadcrumbs exist
+- WeasyPrint PDF reports and golden fixture suite still planned
 
 ## Five-Layer Pipeline
 
@@ -21,12 +30,13 @@ alwaysApply: true
 
 ## Data Flow Rules
 
-- Telematics feeds (Geotab, Motive, Samsara) enter only through ingestion adapters.
+- Telematics feeds enter only through ingestion adapters (Geotab first).
 - All provider data maps to `DCWCanonicalHOSLog` before persistence.
 - Engine evaluates timelines; every audit record binds `inputs_hash` + `rule_pack_version`.
 - Violations publish to Redis pub/sub; notifier handles telephony with idempotent alert locks.
-- `canonical_hos_logs` and `audit_records` are append-only — never UPDATE or DELETE.
+- `canonical_hos_logs`, `gps_breadcrumbs`, and `audit_records` are append-only — never UPDATE or DELETE.
 
 ## Dev Commands
 
 Use `dcw-backend/Makefile`: `make dev`, `make worker`, `make test`, `make lint`, `make format`.
+See also `make ui`, `make seed-history`, `make backtest-dispatches` for the HTMX timeline workflow.

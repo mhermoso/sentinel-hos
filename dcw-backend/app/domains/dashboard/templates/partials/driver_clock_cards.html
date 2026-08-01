@@ -1,0 +1,45 @@
+{% if driver_clocks %}
+<div class="driver-clocks-grid">
+  {% for card in driver_clocks %}
+  <a class="driver-clock-card{% if card.at_risk %} at-risk{% endif %}" href="{{ card.day_href }}">
+    <div class="driver-clock-card-head">
+      <span class="driver-clock-name">{{ card.driver_name or card.driver_id }}</span>
+      {% if card.status %}
+      <span class="status-chip status-{{ card.status }}">{{ card.status }}</span>
+      {% endif %}
+    </div>
+    {% if card.driver_name %}
+    <div class="muted small driver-clock-id">{{ card.driver_id }}</div>
+    {% endif %}
+    <div class="driver-clock-gauges">
+      {% for key in ["driving", "duty", "weekly"] %}
+      {% set g = card.clocks[key] %}
+      <div class="gauge-row{% if g.over %} over{% endif %}">
+        <div class="gauge-label">
+          <span>{{ g.label }}</span>
+          <span>{{ g.remaining_h }}h left</span>
+        </div>
+        <div class="gauge-track">
+          <div class="gauge-fill" style="width: {{ g.pct }}%"></div>
+          <div class="gauge-limit"></div>
+        </div>
+        <div class="gauge-meta muted">{{ g.used_h }}h / {{ g.limit_h }}h</div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="driver-clock-foot muted small">
+      {% if not card.is_compliant %}
+      <span class="warn-text">Non-compliant</span>
+      {% elif card.break_required %}
+      <span class="warn-text">Break required</span>
+      {% else %}
+      <span>Compliant</span>
+      {% endif %}
+      · eval {{ card.evaluated_at | local_clock(timezone) }}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted driver-clocks-empty">No live clock evaluations yet.</p>
+{% endif %}

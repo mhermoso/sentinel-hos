@@ -1,0 +1,64 @@
+<div class="logs-services" role="group" aria-label="Service status">
+  {% for key, svc in services.items() %}
+  <div class="logs-service {% if svc.status == 'healthy' %}ok{% elif svc.status == 'stale' %}warn{% elif svc.status == 'unknown' %}muted{% else %}bad{% endif %}">
+    <span class="logs-service-label">{{ svc.label }}</span>
+    <span class="logs-service-detail">{{ svc.detail }}</span>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="range-chips" role="group" aria-label="Log source filters">
+  {% for chip in filter_chips %}
+  <a class="range-chip {% if source == chip.key %}active{% endif %}"
+     href="/ui/logs?source={{ chip.key }}">
+    {{ chip.label }}
+  </a>
+  {% endfor %}
+</div>
+
+<div class="panel-meta">
+  <span id="logs-count">{{ row_count }} events</span>
+  <span>Auto-refresh 5s · Display TZ: {{ timezone }}{% if tz_abbrev %} ({{ tz_abbrev }}){% endif %}</span>
+</div>
+
+<table class="logs-table" id="logs-table">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Source</th>
+      <th>Level</th>
+      <th>Driver</th>
+      <th>Message</th>
+    </tr>
+  </thead>
+  <tbody id="logs-table-body">
+    {% if rows %}
+      {% for row in rows %}
+      <tr class="logs-row source-{{ row.source }} level-{{ row.level | lower }}"
+          data-source="{{ row.source }}">
+        <td class="mono" title="{{ row.timestamp.isoformat() }}">
+          {{ row.timestamp | local_dt(timezone) }}
+        </td>
+        <td><span class="source-tag source-{{ row.source }}">{{ row.source }}</span></td>
+        <td><span class="level-tag level-{{ row.level | lower }}">{{ row.level }}</span></td>
+        <td>
+          {% if row.driver_id %}
+            <span class="driver-cell">{{ row.driver_name or row.driver_id }}</span>
+            {% if row.driver_name %}<span class="small muted">{{ row.driver_id }}</span>{% endif %}
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td class="desc">
+          {{ row.message }}
+          {% if row.process %}<span class="small muted">· {{ row.process }}</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr>
+        <td colspan="5" class="empty-state">No log events for this filter yet.</td>
+      </tr>
+    {% endif %}
+  </tbody>
+</table>

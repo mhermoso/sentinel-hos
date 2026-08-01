@@ -2,6 +2,8 @@
 
 Detailed planning documents for taking Sentinel HOS to production.
 
+**Progress snapshot:** Implementation has moved past pure planning — see the progress column in [LAUNCH_CHECKLIST.md](../../LAUNCH_CHECKLIST.md). These docs remain the planning/checklist source; mark tasks done there as work lands in `dcw-backend/`.
+
 | # | Document | Summary |
 |---|----------|---------|
 | 1 | [Foundation & Decisions](./01-foundation-and-decisions.md) | Tech stack, architecture, domain model, regulatory scope |

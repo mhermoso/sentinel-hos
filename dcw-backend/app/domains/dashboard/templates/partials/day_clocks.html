@@ -1,0 +1,60 @@
+{% if day_clocks %}
+<section class="day-clocks{% if day_clocks.at_risk %} at-risk{% endif %}" aria-label="HOS clocks">
+  <div class="day-clocks-head">
+    <h2>HOS clocks</h2>
+    <p class="muted small">Evaluated as of {{ day_clocks.as_of_local }}</p>
+  </div>
+  <div class="day-clocks-body">
+    <div class="day-clocks-gauges">
+      {% for key in ["driving", "duty", "weekly"] %}
+      {% set g = day_clocks.clocks[key] %}
+      <div class="gauge-row{% if g.over %} over{% endif %}">
+        <div class="gauge-label">
+          <span>{{ g.label }}</span>
+          <span>{{ g.remaining_h }}h left</span>
+        </div>
+        <div class="gauge-track">
+          <div class="gauge-fill" style="width: {{ g.pct }}%"></div>
+          <div class="gauge-limit"></div>
+        </div>
+        <div class="gauge-meta muted">{{ g.used_h }}h / {{ g.limit_h }}h</div>
+      </div>
+      {% endfor %}
+    </div>
+    <dl class="day-clocks-meta">
+      <div>
+        <dt>Shift start</dt>
+        <dd>
+          {% if day_clocks.shift_start_local %}
+          {{ day_clocks.shift_start_local }}
+          {% else %}
+          <span class="muted">No active shift</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>34h restart</dt>
+        <dd>
+          {% if day_clocks.had_34h_restart and day_clocks.last_valid_restart_local %}
+          Applied at {{ day_clocks.last_valid_restart_local }}
+          {% else %}
+          <span class="muted">None in window</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Status</dt>
+        <dd>
+          {% if not day_clocks.is_compliant %}
+          <span class="warn-text">Non-compliant</span>
+          {% elif day_clocks.break_required %}
+          <span class="warn-text">Break required</span>
+          {% else %}
+          Compliant
+          {% endif %}
+        </dd>
+      </div>
+    </dl>
+  </div>
+</section>
+{% endif %}

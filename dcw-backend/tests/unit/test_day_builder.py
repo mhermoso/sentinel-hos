@@ -7,10 +7,12 @@ from zoneinfo import ZoneInfo
 
 from app.domains.dashboard.day_builder import (
     RawHOSEvent,
+    attach_alerts_to_segments,
     build_day_points,
     chicago_day_bounds,
     filter_backtest_markers,
     format_duration_hhmm,
+    format_duration_hms,
     merge_alert_markers,
 )
 
@@ -99,6 +101,121 @@ def test_odometer_distance_on_segments() -> None:
     assert abs(d_seg["distance_mi"] - 10.0) < 0.01
     assert abs(totals["D_m"] - 16093.44) < 0.01
     assert abs(totals["distance_m"] - 16093.44) < 0.01
+
+
+def test_continued_segment_clips_overnight_odometer() -> None:
+    """Midnight (Continued) must not claim pre-midnight odometer miles.
+
+    Mirrors Geotab hourly Driving intermediates crossing Chicago midnight:
+    carry at 23:02 CT, next at 00:02 CT — only ~3 min belong to the new day.
+    """
+    bounds = chicago_day_bounds(date(2026, 7, 30), ZoneInfo("America/Chicago"))
+    # Day start = 2026-07-30 05:00 UTC
+    carry_odo = 1_528_468_798.0
+    next_odo = 1_528_579_098.0  # +110_300 m ≈ 68.5 mi over the full hour
+    events = [
+        RawHOSEvent(
+            "D",
+            datetime(2026, 7, 30, 4, 2, 57, tzinfo=timezone.utc),
+            odometer_m=carry_odo,
+            latitude=34.777,
+            longitude=-92.2345,
+            device_id="b15",
+            raw_payload={"origin": "Automatic"},
+        ),
+        RawHOSEvent(
+            "D",
+            datetime(2026, 7, 30, 5, 2, 57, tzinfo=timezone.utc),
+            odometer_m=next_odo,
+            latitude=35.4523,
+            longitude=-91.4082,
+            device_id="b15",
+            raw_payload={"origin": "Automatic"},
+        ),
+    ]
+    grid, totals, carry = build_day_points(events, bounds)
+    assert carry == "D"
+    continued = grid[0]
+    assert continued["continued"] is True
+    assert continued["status"] == "D"
+    assert abs(continued["duration_seconds"] - 177.0) < 0.5  # 00:00 → 00:02:57
+    # In-day fraction: 177 / 3600 of the 110_300 m hour
+    expected_m = 110_300.0 * (177.0 / 3600.0)
+    assert abs(continued["distance_m"] - expected_m) < 1.0
+    assert continued["distance_mi"] < 10.0  # not the bogus ~68.5 mi
+    assert abs(totals["D_m"] - expected_m) < 1.0
+
+
+def test_activity_log_fields_and_continued() -> None:
+    bounds = chicago_day_bounds(date(2025, 7, 28), ZoneInfo("America/Chicago"))
+    events = [
+        RawHOSEvent(
+            "OFF",
+            datetime(2025, 7, 27, 20, 0, tzinfo=timezone.utc),
+            device_id="b1",
+            annotation="yard",
+            latitude=41.8,
+            longitude=-87.6,
+            raw_payload={"origin": "Automatic"},
+        ),
+        RawHOSEvent(
+            "D",
+            datetime(2025, 7, 28, 14, 0, tzinfo=timezone.utc),
+            device_id="b1",
+            latitude=41.9,
+            longitude=-87.7,
+            raw_payload={
+                "origin": "Manual",
+                "location": {"address": "Chicago, IL"},
+            },
+        ),
+    ]
+    grid, _totals, carry = build_day_points(events, bounds)
+    assert carry == "OFF"
+    assert grid[0]["continued"] is True
+    assert grid[0]["origin"] == "Automatic"
+    assert grid[0]["device_id"] == "b1"
+    assert "41.8000" in grid[0]["location_label"]
+    d_seg = next(e for e in grid if e["status"] == "D")
+    assert d_seg["continued"] is False
+    assert d_seg["origin"] == "Manual"
+    assert d_seg["location_label"] == "Chicago, IL"
+    assert d_seg["duration_hms"] == format_duration_hms(d_seg["duration_seconds"])
+    assert d_seg["alerts"] == []
+
+
+def test_attach_alerts_to_segments_by_as_of() -> None:
+    bounds = chicago_day_bounds(date(2025, 7, 28), ZoneInfo("America/Chicago"))
+    events = [
+        RawHOSEvent("D", datetime(2025, 7, 28, 12, 0, tzinfo=timezone.utc)),
+        RawHOSEvent("OFF", datetime(2025, 7, 28, 16, 0, tzinfo=timezone.utc)),
+    ]
+    grid, _totals, _carry = build_day_points(events, bounds)
+    markers = [
+        {
+            "as_of": datetime(2025, 7, 28, 13, 30, tzinfo=timezone.utc),
+            "violation_type": "DRIVING_LIMIT",
+            "severity": "WARNING",
+            "rule_ref": "§ 395.3(a)(3)",
+            "description": "approaching limit",
+            "source": "backtest",
+        },
+        {
+            "as_of": datetime(2025, 7, 28, 17, 0, tzinfo=timezone.utc),
+            "violation_type": "DUTY_WINDOW",
+            "severity": "VIOLATION",
+            "rule_ref": "§ 395.3(a)(2)",
+            "description": "over",
+            "source": "backtest",
+        },
+    ]
+    attach_alerts_to_segments(grid, markers)
+    d_seg = next(e for e in grid if e["status"] == "D")
+    off_seg = next(e for e in grid if e["status"] == "OFF")
+    assert len(d_seg["alerts"]) == 1
+    assert d_seg["alerts"][0]["violation_type"] == "DRIVING_LIMIT"
+    assert len(off_seg["alerts"]) == 1
+    assert off_seg["alerts"][0]["severity"] == "VIOLATION"
 
 
 def test_merge_alert_markers_dedupes() -> None:

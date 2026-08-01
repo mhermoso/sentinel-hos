@@ -1,4 +1,5 @@
-<div class="alert-detail" id="alert-detail-root" data-alert-detail>
+<div class="alert-detail" id="alert-detail-root" data-alert-detail {% if full_page %}data-full-page{% endif %}>
+  {% if not full_page %}
   <header class="alert-detail-head">
     <div>
       <span class="sev sev-{{ detail.meta.severity }}">{{ detail.meta.severity }}</span>
@@ -10,7 +11,13 @@
       </p>
     </div>
   </header>
-
+  {% else %}
+  <p class="muted">
+    {{ detail.meta.local_time }}
+    · {{ detail.meta.source }}
+    · {{ detail.meta.rule_ref or '—' }}
+  </p>
+  {% endif %}
 
   <p class="alert-desc">{{ detail.meta.description }}</p>
   {% if not detail.meta.matched_on_recompute %}
@@ -64,6 +71,8 @@
       <script type="application/json">{{ {
         'events': detail.context_events,
         'as_of_fraction': detail.context_window.as_of_fraction,
+        'before_hours': 6,
+        'after_hours': 2,
         'violation_type': detail.meta.violation_type,
         'severity': detail.meta.severity,
       } | tojson }}</script>
@@ -72,9 +81,14 @@
 
   <footer class="alert-detail-foot">
     <span class="muted">{{ detail.meta.rule_pack_version }} · {{ detail.meta.display_timezone }}</span>
-    <a href="/ui/drivers/{{ detail.meta.driver_id }}?date={{ detail.day_date }}">Open day {{ detail.day_date }}</a>
+    <span class="alert-detail-actions">
+      {% if not full_page %}
+      <a class="btn-sm"
+         href="/ui/drivers/{{ detail.meta.driver_id }}/alerts/view?as_of={{ detail.meta.as_of | urlencode }}&amp;violation_type={{ detail.meta.violation_type | urlencode }}&amp;source={{ detail.meta.source | urlencode }}&amp;severity={{ detail.meta.severity | urlencode }}&amp;rule_ref={{ detail.meta.rule_ref | urlencode }}&amp;description={{ detail.meta.description | urlencode }}">
+        Full page
+      </a>
+      {% endif %}
+      <a href="/ui/drivers/{{ detail.meta.driver_id }}?date={{ detail.day_date }}">Open day {{ detail.day_date }}</a>
+    </span>
   </footer>
 </div>
-<script>
-  window.AlertDetail && window.AlertDetail.mount();
-</script>

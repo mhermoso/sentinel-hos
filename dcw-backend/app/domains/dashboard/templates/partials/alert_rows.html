@@ -2,15 +2,24 @@
 {% for a in alerts %}
 <tr
   class="alert-row"
+  data-alert-row
+  data-sortable-row
   data-alert-open
   data-driver-id="{{ a.driver_id }}"
+  data-driver-name="{{ a.driver_name or a.driver_id }}"
   data-as-of="{{ a.as_of.isoformat() if a.as_of is not string else a.as_of }}"
   data-violation-type="{{ a.violation_type }}"
   data-source="{{ a.source }}"
   data-severity="{{ a.severity }}"
   data-rule-ref="{{ a.rule_ref }}"
-  data-description="{{ a.description }}">
-  <td class="mono">{{ a.local_timestamp }}</td>
+  data-description="{{ a.description }}"
+  data-sort-time="{{ a.as_of.isoformat() if a.as_of is not string else a.as_of }}"
+  data-sort-driver="{{ (a.driver_name or a.driver_id)|lower }}|{{ a.driver_id|lower }}"
+  data-sort-type="{{ a.violation_type|lower }}"
+  data-sort-severity="{{ a.severity|lower }}"
+  data-sort-source="{{ a.source|lower }}"
+  data-sort-description="{{ a.description|lower }}">
+  <td class="mono">{{ a.as_of | local_dt(timezone) }}</td>
   <td>
     <strong>{{ a.driver_name or a.driver_id }}</strong>
     <div class="muted small">{{ a.driver_id }}</div>

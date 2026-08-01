@@ -52,3 +52,18 @@ def hash_canonical_log(log_dict: Dict[str, Any]) -> str:
         "odometer_km": log_dict.get("odometer_km"),
     }
     return compute_inputs_hash(relevant_fields)
+
+
+def hash_gps_breadcrumb(crumb_dict: Dict[str, Any]) -> str:
+    """Hash integrity-relevant fields of a GPS breadcrumb (ADR-007)."""
+    relevant_fields = {
+        "tenant_id": crumb_dict.get("tenant_id"),
+        "device_id": crumb_dict.get("device_id"),
+        "driver_id": crumb_dict.get("driver_id"),
+        "raw_id": crumb_dict.get("raw_id"),
+        "event_timestamp": crumb_dict.get("event_timestamp"),
+        "latitude": crumb_dict.get("latitude"),
+        "longitude": crumb_dict.get("longitude"),
+        "speed_kmh": crumb_dict.get("speed_kmh"),
+    }
+    return compute_inputs_hash(relevant_fields)

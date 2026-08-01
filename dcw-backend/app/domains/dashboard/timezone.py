@@ -7,13 +7,16 @@ remains ``settings.DEFAULT_HOME_TERMINAL_TIMEZONE``.
 
 from __future__ import annotations
 
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Request
 from fastapi.responses import Response
 
 from app.core.config import settings
+
+DateTimeLike = Union[datetime, str, None]
 
 COOKIE_NAME = "dcw_display_tz"
 COOKIE_MAX_AGE = 365 * 24 * 3600
@@ -93,10 +96,74 @@ def set_display_timezone_cookie(response: Response, tz_name: str) -> None:
 
 def tz_abbreviation(tz_name: str, at: Optional[object] = None) -> str:
     """Return CST/CDT-style abbreviation for labels."""
-    from datetime import datetime, timezone
-
     zone = zoneinfo_for(tz_name)
     when = at if isinstance(at, datetime) else datetime.now(timezone.utc)
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
     return when.astimezone(zone).tzname() or tz_name
+
+
+def ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def parse_datetime(value: DateTimeLike) -> Optional[datetime]:
+    """Parse API/DB datetime values (datetime or ISO string)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return ensure_utc(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return ensure_utc(datetime.fromisoformat(text.replace("Z", "+00:00")))
+    except ValueError:
+        return None
+
+
+def to_display_datetime(value: DateTimeLike, tz_name: Optional[str] = None) -> Optional[datetime]:
+    """Convert a UTC instant to the user's display timezone."""
+    dt = parse_datetime(value)
+    if dt is None:
+        return None
+    return dt.astimezone(zoneinfo_for(tz_name))
+
+
+def format_display_datetime(
+    value: DateTimeLike,
+    tz_name: Optional[str] = None,
+    *,
+    fmt: str = "%Y-%m-%d %H:%M:%S",
+    with_tz: bool = False,
+) -> str:
+    """Format a timestamp in the display timezone for UI tables."""
+    local = to_display_datetime(value, tz_name)
+    if local is None:
+        return "—"
+    text = local.strftime(fmt)
+    if with_tz:
+        abbrev = local.tzname() or ""
+        return f"{text} {abbrev}".rstrip()
+    return text
+
+
+def format_display_date(
+    value: DateTimeLike,
+    tz_name: Optional[str] = None,
+) -> str:
+    """Calendar date in the display timezone (``YYYY-MM-DD``)."""
+    local = to_display_datetime(value, tz_name)
+    if local is None:
+        return ""
+    return local.date().isoformat()
+
+
+def format_display_clock(
+    value: DateTimeLike,
+    tz_name: Optional[str] = None,
+) -> str:
+    """Clock time in the display timezone (``HH:MM:SS``)."""
+    return format_display_datetime(value, tz_name, fmt="%H:%M:%S")

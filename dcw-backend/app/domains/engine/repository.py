@@ -166,3 +166,24 @@ class EngineRepository:
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_latest_audit_records_batch(
+        self,
+        tenant_id: str,
+        driver_ids: list[str],
+    ) -> dict[str, AuditRecord]:
+        """Fetch the most recent audit record per driver in one query."""
+        if not driver_ids:
+            return {}
+        stmt = (
+            select(AuditRecord)
+            .distinct(AuditRecord.driver_id)
+            .where(
+                AuditRecord.tenant_id == tenant_id,
+                AuditRecord.driver_id.in_(driver_ids),
+            )
+            .order_by(AuditRecord.driver_id, AuditRecord.evaluated_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        records = list(result.scalars().all())
+        return {rec.driver_id: rec for rec in records}

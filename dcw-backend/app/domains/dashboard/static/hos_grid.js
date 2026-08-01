@@ -167,13 +167,29 @@
 
   function formatLocalClock(iso) {
     if (!iso) return "";
+    // Day builder already encodes display-TZ wall clock in local_* ISO strings.
+    // Prefer that wall clock so browser TZ cannot shift the tooltip.
+    const match = String(iso).match(/T(\d{2}:\d{2}:\d{2})/);
+    if (match) return match[1];
     try {
       const d = new Date(iso);
       if (Number.isNaN(d.getTime())) return String(iso).slice(11, 19);
-      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      return d.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
     } catch (err) {
       return String(iso).slice(11, 19);
     }
+  }
+
+  function formatLocalDateTime(iso) {
+    if (!iso) return "";
+    const match = String(iso).match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/);
+    if (match) return `${match[1]} ${match[2]}`;
+    return String(iso).replace("T", " ").slice(0, 19);
   }
 
   function segmentTipText(ev) {
@@ -387,7 +403,8 @@
       g.appendChild(tick);
       appendMarkerShape(g, ns, m.severity, x, y, fill);
 
-      const title = `${m.violation_type} (${m.severity})\n${m.description || ""}\n${m.local_timestamp || m.as_of || ""} · ${m.source || ""}`;
+      const when = formatLocalDateTime(m.local_timestamp || m.as_of || "");
+      const title = `${m.violation_type} (${m.severity})\n${m.description || ""}\n${when} · ${m.source || ""}`;
       g.addEventListener("mouseenter", (ev) => {
         tip.textContent = title;
         tip.classList.add("visible");
