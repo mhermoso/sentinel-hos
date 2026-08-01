@@ -6,8 +6,29 @@ Pydantic Settings.  Every layer references this single ``settings`` instance.
 
 from __future__ import annotations
 
-from pydantic import Field
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def normalize_database_url(url: str) -> str:
+    """Normalize a Postgres connection URL for SQLAlchemy + asyncpg.
+
+    Managed providers (e.g. DigitalOcean) hand out libpq-style URLs such as
+    ``postgresql://user:pass@host:25060/db?sslmode=require``. SQLAlchemy
+    requires the ``postgresql+asyncpg://`` scheme, and asyncpg rejects the
+    libpq ``sslmode`` keyword in favor of ``ssl``.
+    """
+    parts = urlsplit(url)
+    scheme = parts.scheme
+    if scheme in ("postgres", "postgresql"):
+        scheme = "postgresql+asyncpg"
+    query = [
+        ("ssl" if key == "sslmode" else key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+    ]
+    return urlunsplit((scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 class Settings(BaseSettings):
@@ -34,6 +55,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = (
         "postgresql+asyncpg://dcw_user:dcw_secure_password@localhost:5432/dcw_compliance_db"
     )
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def _normalize_database_url(cls, value: str) -> str:
+        return normalize_database_url(value)
 
     # ── Redis 7.2 ────────────────────────────────────────────────────────
     REDIS_HOST: str = "localhost"
