@@ -1,0 +1,43 @@
+---
+description: FastAPI router, dependency injection, and service patterns
+globs: dcw-backend/app/domains/**/router.py,dcw-backend/app/main.py
+alwaysApply: false
+---
+
+# API & Service Patterns
+
+## FastAPI Routers
+
+```python
+router = APIRouter(prefix="/api", tags=["dashboard"])
+
+@router.get("/health", response_model=HealthResponse)
+async def health_check(session: AsyncSession = Depends(get_session)) -> HealthResponse:
+    ...
+```
+
+- Always declare `response_model=` on endpoints
+- Use `Depends(get_session)` for DB, `Depends(get_redis())` for Redis
+- Use `Query()` with `le`/`ge` bounds for pagination and filters
+- Raise `HTTPException` with `status.HTTP_*` constants for errors
+
+## Schema Separation
+
+- **Pydantic** (`schemas.py`) — API contracts, canonical models, compliance results
+- **SQLAlchemy** (`models.py`) — persistence layer only
+- Map between layers in router or repository, not in schemas
+
+## Process Separation
+
+| Process | Entry | Responsibility |
+|---------|-------|----------------|
+| API server | `make dev` → uvicorn `app.main:app` | REST + notifier subscriber on startup |
+| ARQ worker | `make worker` → `WorkerSettings` | Ingestion poll + compliance sweep |
+
+## SaaS Tier Gating
+
+Use `require_tier_capability()` from `app/core/billing.py` as a FastAPI dependency. Locked features return HTTP 402 with structured `FEATURE_LOCKED` detail.
+
+## Compliance Response Fields
+
+Compliance endpoints should include `evaluated_at`, `rule_pack_version`, and `data_through` in responses.

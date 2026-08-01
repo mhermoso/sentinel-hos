@@ -1,0 +1,37 @@
+---
+description: Modular monolith domain boundaries and import rules
+globs: dcw-backend/app/**/*
+alwaysApply: false
+---
+
+# Modular Monolith Architecture (ADR-002)
+
+All domains live in one deployable unit under `app/domains/`. Shared infrastructure only in `app/core/`.
+
+## Domain Modules
+
+| Domain | Path | Responsibility |
+|--------|------|----------------|
+| ingestion | `app/domains/ingestion/` | ARQ poller, adapters, normalizer, repository |
+| engine | `app/domains/engine/` | Rule pack, calculators, state machine, sweeper |
+| notifier | `app/domains/notifier/` | Redis subscriber, Twilio Voice/SMS, alert suppression |
+| dashboard | `app/domains/dashboard/` | FastAPI router, API response schemas |
+| billing | `app/domains/billing/` | SaaS tier schemas and gating |
+
+## Domain File Layout
+
+Each domain follows this structure when applicable:
+
+- `schemas.py` — Pydantic v2 DTOs (API + internal contracts)
+- `models.py` — SQLAlchemy ORM models
+- `repository.py` — Data access (class with `AsyncSession`)
+- `router.py` — FastAPI routes (dashboard only today)
+- `adapters/` — Provider-specific code (ingestion only)
+
+## Import Boundaries
+
+- ✅ Cross-domain imports allowed (e.g. engine imports ingestion schemas/models)
+- ✅ All domains import from `app/core/` for config, database, redis, security
+- ❌ Never put business logic in `app/core/`
+- ❌ Never import provider-specific adapter code into `engine/` or `notifier/`
+- ❌ Do not add new code to legacy root scripts (`geotab_ingestor.py`); use `dcw-backend/`

@@ -1,0 +1,80 @@
+<div class="alert-detail" id="alert-detail-root" data-alert-detail>
+  <header class="alert-detail-head">
+    <div>
+      <span class="sev sev-{{ detail.meta.severity }}">{{ detail.meta.severity }}</span>
+      <h2>{{ detail.meta.violation_type }}</h2>
+      <p class="muted">
+        {{ detail.meta.local_time }}
+        · {{ detail.meta.source }}
+        · {{ detail.meta.rule_ref or '—' }}
+      </p>
+    </div>
+  </header>
+
+
+  <p class="alert-desc">{{ detail.meta.description }}</p>
+  {% if not detail.meta.matched_on_recompute %}
+  <p class="hint warn-text">Recompute did not re-emit this violation; clocks below are still evaluated at the alert time.</p>
+  {% endif %}
+
+  <section class="detail-section">
+    <h3>Limit gauges</h3>
+    <div class="gauge-host" data-alert-gauges>
+      <script type="application/json">{{ detail.clocks | tojson }}</script>
+    </div>
+  </section>
+
+  {% if detail.shift_window %}
+  <section class="detail-section">
+    <h3>Shift / clock window</h3>
+    <p>
+      <strong>{{ detail.shift_window.label }}</strong>
+      <span class="mono">{{ detail.shift_window.start_local }} → {{ detail.shift_window.end_local }}</span>
+    </p>
+    <p class="muted small">{{ detail.shift_window.note }}</p>
+  </section>
+  {% endif %}
+
+  <section class="detail-section">
+    <h3>How it was calculated</h3>
+    <ol class="explain-steps">
+      {% for step in detail.explanation %}
+      <li>
+        <strong>{{ step.step }}</strong>
+        <span class="mono">{{ step.value }}</span>
+        <span class="muted">{{ step.note }}</span>
+      </li>
+      {% endfor %}
+    </ol>
+    {% if detail.overage_seconds %}
+    <p class="mono">Overage: {{ '%.1f'|format(detail.overage_seconds / 3600) }}h</p>
+    {% endif %}
+    {% if detail.clocks.had_34h_restart %}
+    <p class="hint">Valid 34h restart applied
+      {% if detail.clocks.last_valid_restart_at %}at {{ detail.clocks.last_valid_restart_at }}{% endif %}
+    </p>
+    {% endif %}
+  </section>
+
+  <section class="detail-section">
+    <h3>HOS context (−6h → +2h)</h3>
+    <p class="muted small">{{ detail.context_window.start_local }} → {{ detail.context_window.end_local }}</p>
+    <p class="hint">Highlighted segments contributed to the firing rule.</p>
+    <div class="context-host" data-alert-context>
+      <script type="application/json">{{ {
+        'events': detail.context_events,
+        'as_of_fraction': detail.context_window.as_of_fraction,
+        'violation_type': detail.meta.violation_type,
+        'severity': detail.meta.severity,
+      } | tojson }}</script>
+    </div>
+  </section>
+
+  <footer class="alert-detail-foot">
+    <span class="muted">{{ detail.meta.rule_pack_version }} · {{ detail.meta.display_timezone }}</span>
+    <a href="/ui/drivers/{{ detail.meta.driver_id }}?date={{ detail.day_date }}">Open day {{ detail.day_date }}</a>
+  </footer>
+</div>
+<script>
+  window.AlertDetail && window.AlertDetail.mount();
+</script>

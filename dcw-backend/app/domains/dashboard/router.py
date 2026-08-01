@@ -2,7 +2,13 @@
 
 Provides REST endpoints for:
   - GET /api/health            — extended health check
+  - GET /api/drivers           — all drivers (historical + live)
   - GET /api/drivers/active    — live driver statuses from Redis + PG
+  - GET /api/drivers/positions — latest lat/lon per driver
+  - GET /api/drivers/{id}/day  — home-terminal day grid + alert markers
+  - GET /api/alerts            — fleet alerts (backtest + live) with filters
+  - GET /api/alerts/dispatch-log — Twilio / dry-run JSONL history
+  - GET /api/drivers/{id}/alert-markers — merged backtest + live markers
   - GET /api/drivers/{id}/timeline   — historical HOS log query
   - GET /api/drivers/{id}/compliance — latest compliance result
   - GET /api/audit/records     — paginated audit record listing
@@ -11,7 +17,9 @@ Provides REST endpoints for:
 from __future__ import annotations
 
 import logging
-from typing import List
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, func
@@ -20,24 +28,356 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_session
 from app.core.redis import get_redis
+from app.domains.dashboard.alert_detail import build_alert_detail, logs_to_events
+from app.domains.dashboard.alert_filters import (
+    default_alerts_utc_window,
+    normalize_filter_str,
+)
+from app.domains.dashboard.day_builder import (
+    METERS_PER_MILE,
+    RawHOSEvent,
+    annotate_marker_hours,
+    build_day_points,
+    chicago_day_bounds,
+    collect_fleet_alerts,
+    filter_backtest_markers,
+    format_distance_mi,
+    format_duration_hhmm,
+    load_backtest_dispatches,
+    markers_from_audit_violations,
+    merge_alert_markers,
+)
+from app.domains.dashboard.driver_names import resolve_driver_name
 from app.domains.dashboard.schemas import (
+    AlertDetailResponse,
+    AlertMarkerResponse,
+    AlertMarkersResponse,
     AuditRecordResponse,
     ComplianceSnapshotResponse,
+    DayStatusEventResponse,
+    DispatchLogItemResponse,
+    DispatchLogResponse,
+    DriverDayResponse,
+    DriverListItemResponse,
+    DriverListResponse,
+    DriverPositionResponse,
+    DriverPositionsResponse,
     DriverStatusResponse,
     DriverTimelineResponse,
+    DurationTotalsResponse,
+    FleetAlertItemResponse,
+    FleetAlertsResponse,
     HOSEventResponse,
     HealthResponse,
     PaginatedAuditResponse,
     ViolationResponse,
 )
+from app.domains.dashboard.timezone import default_display_timezone, zoneinfo_for
 from app.domains.engine.models import AuditRecord
 from app.domains.engine.repository import EngineRepository
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.repository import IngestionRepository
+from app.domains.notifier.alert_logger import read_alert_log
 
 logger = logging.getLogger("dcw.dashboard.router")
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
+
+
+# ── Shared helpers (also used by UI routes) ───────────────────────────────
+
+
+async def _list_all_drivers(session: AsyncSession) -> List[DriverListItemResponse]:
+    """Union of distinct PG drivers + Redis active set."""
+    tenant_id = settings.GEOTAB_DATABASE
+    active_ids = set(await IngestionRepository.get_active_driver_ids())
+
+    stmt = (
+        select(
+            CanonicalHOSLogRecord.driver_id,
+            func.max(CanonicalHOSLogRecord.driver_name).label("driver_name"),
+            func.count().label("event_count"),
+            func.min(CanonicalHOSLogRecord.event_timestamp).label("first_event_at"),
+            func.max(CanonicalHOSLogRecord.event_timestamp).label("last_event_at"),
+        )
+        .where(CanonicalHOSLogRecord.tenant_id == tenant_id)
+        .group_by(CanonicalHOSLogRecord.driver_id)
+        .order_by(func.max(CanonicalHOSLogRecord.driver_name).nulls_last(), CanonicalHOSLogRecord.driver_id)
+    )
+    result = await session.execute(stmt)
+    rows = list(result.all())
+
+    by_id: dict[str, DriverListItemResponse] = {}
+    for row in rows:
+        # Latest status at last_event_at
+        status_stmt = (
+            select(CanonicalHOSLogRecord.status)
+            .where(
+                CanonicalHOSLogRecord.tenant_id == tenant_id,
+                CanonicalHOSLogRecord.driver_id == row.driver_id,
+                CanonicalHOSLogRecord.event_timestamp == row.last_event_at,
+            )
+            .limit(1)
+        )
+        status_result = await session.execute(status_stmt)
+        current_status = status_result.scalar_one_or_none()
+
+        by_id[row.driver_id] = DriverListItemResponse(
+            driver_id=row.driver_id,
+            driver_name=resolve_driver_name(row.driver_id, row.driver_name),
+            tenant_id=tenant_id,
+            is_live=row.driver_id in active_ids,
+            event_count=int(row.event_count),
+            first_event_at=row.first_event_at,
+            last_event_at=row.last_event_at,
+            current_status=current_status,
+        )
+
+    for driver_id in active_ids:
+        if driver_id in by_id:
+            continue
+        by_id[driver_id] = DriverListItemResponse(
+            driver_id=driver_id,
+            driver_name=resolve_driver_name(driver_id),
+            tenant_id=tenant_id,
+            is_live=True,
+            event_count=0,
+        )
+
+    drivers = sorted(
+        by_id.values(),
+        key=lambda d: (
+            0 if d.driver_name else 1,
+            0 if d.event_count else 1,
+            (d.driver_name or "").lower(),
+            d.driver_id,
+        ),
+    )
+    return drivers
+
+
+async def _fetch_driver_events_for_day(
+    session: AsyncSession,
+    driver_id: str,
+    day_end_utc: datetime,
+) -> tuple[List[CanonicalHOSLogRecord], Optional[str]]:
+    """All events up to day end (needed for midnight carry-forward)."""
+    tenant_id = settings.GEOTAB_DATABASE
+    stmt = (
+        select(CanonicalHOSLogRecord)
+        .where(
+            CanonicalHOSLogRecord.tenant_id == tenant_id,
+            CanonicalHOSLogRecord.driver_id == driver_id,
+            CanonicalHOSLogRecord.event_timestamp < day_end_utc,
+        )
+        .order_by(CanonicalHOSLogRecord.event_timestamp.asc())
+    )
+    result = await session.execute(stmt)
+    records = list(result.scalars().all())
+    db_name: Optional[str] = None
+    for rec in records:
+        if rec.driver_name:
+            db_name = rec.driver_name
+            break
+    if db_name is None:
+        name_stmt = (
+            select(CanonicalHOSLogRecord.driver_name)
+            .where(
+                CanonicalHOSLogRecord.tenant_id == tenant_id,
+                CanonicalHOSLogRecord.driver_id == driver_id,
+                CanonicalHOSLogRecord.driver_name.is_not(None),
+            )
+            .limit(1)
+        )
+        name_result = await session.execute(name_stmt)
+        db_name = name_result.scalar_one_or_none()
+    return records, resolve_driver_name(driver_id, db_name)
+
+
+async def _live_audit_markers(
+    session: AsyncSession,
+    driver_id: str,
+    start_utc: datetime,
+    end_utc: datetime,
+) -> List[dict]:
+    tenant_id = settings.GEOTAB_DATABASE
+    stmt = (
+        select(AuditRecord)
+        .where(
+            AuditRecord.tenant_id == tenant_id,
+            AuditRecord.driver_id == driver_id,
+            AuditRecord.evaluated_at >= start_utc,
+            AuditRecord.evaluated_at < end_utc,
+        )
+        .order_by(AuditRecord.evaluated_at.asc())
+    )
+    result = await session.execute(stmt)
+    records = list(result.scalars().all())
+    violations: List[dict] = []
+    for rec in records:
+        for v in rec.violations or []:
+            if isinstance(v, dict):
+                violations.append(v)
+    return markers_from_audit_violations(
+        violations, start_utc, end_utc, driver_id=driver_id
+    )
+
+
+async def _fleet_live_audit_markers(
+    session: AsyncSession,
+    start_utc: Optional[datetime],
+    end_utc: Optional[datetime],
+    driver_id: Optional[str] = None,
+) -> List[dict]:
+    """Collect live audit violations across drivers for the Alerts tab."""
+    tenant_id = settings.GEOTAB_DATABASE
+    stmt = select(AuditRecord).where(AuditRecord.tenant_id == tenant_id)
+    if driver_id:
+        stmt = stmt.where(AuditRecord.driver_id == driver_id)
+    if start_utc is not None:
+        stmt = stmt.where(AuditRecord.evaluated_at >= start_utc)
+    if end_utc is not None:
+        stmt = stmt.where(AuditRecord.evaluated_at < end_utc)
+    stmt = stmt.order_by(AuditRecord.evaluated_at.desc()).limit(2000)
+    result = await session.execute(stmt)
+    records = list(result.scalars().all())
+    markers: List[dict] = []
+    for rec in records:
+        for v in rec.violations or []:
+            if not isinstance(v, dict):
+                continue
+            markers.append(
+                {
+                    **v,
+                    "driver_id": rec.driver_id,
+                    "source": "live_audit",
+                }
+            )
+    # Collapse per driver/type/severity for the window
+    window_start = start_utc or datetime.min.replace(tzinfo=timezone.utc)
+    window_end = end_utc or datetime.max.replace(tzinfo=timezone.utc)
+    by_driver: dict[str, List[dict]] = {}
+    for m in markers:
+        by_driver.setdefault(str(m.get("driver_id", "")), []).append(m)
+    collapsed: List[dict] = []
+    for did, group in by_driver.items():
+        collapsed.extend(
+            markers_from_audit_violations(
+                group, window_start, window_end, driver_id=did
+            )
+        )
+    return collapsed
+
+
+async def _build_driver_day(
+    session: AsyncSession,
+    driver_id: str,
+    local_date: date,
+    display_tz: Optional[str] = None,
+) -> DriverDayResponse:
+    tz_name = display_tz or default_display_timezone()
+    bounds = chicago_day_bounds(local_date, zoneinfo_for(tz_name))
+    records, driver_name = await _fetch_driver_events_for_day(
+        session, driver_id, bounds.end_utc
+    )
+    if not records:
+        # Still allow empty day if driver exists in active set / name known
+        active_ids = set(await IngestionRepository.get_active_driver_ids())
+        if driver_id not in active_ids:
+            # Check any history at all
+            exists_stmt = (
+                select(func.count())
+                .select_from(CanonicalHOSLogRecord)
+                .where(
+                    CanonicalHOSLogRecord.tenant_id == settings.GEOTAB_DATABASE,
+                    CanonicalHOSLogRecord.driver_id == driver_id,
+                )
+            )
+            exists_result = await session.execute(exists_stmt)
+            if int(exists_result.scalar_one()) == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"No HOS events found for driver {driver_id}",
+                )
+
+    raw_events = [
+        RawHOSEvent(
+            status=rec.status,
+            event_timestamp=rec.event_timestamp,
+            raw_id=rec.raw_id,
+            device_id=rec.device_id,
+            annotation=rec.annotation,
+            odometer_m=rec.odometer_km,
+            raw_payload=rec.raw_payload if isinstance(rec.raw_payload, dict) else None,
+        )
+        for rec in records
+    ]
+    grid_events, totals_seconds, carry = build_day_points(raw_events, bounds)
+
+    unk_secs = totals_seconds.get("UNKNOWN", 0.0)
+    total_tracked = sum(
+        totals_seconds[s] for s in ("OFF", "SB", "D", "ON", "UNKNOWN")
+    )
+    pc_secs = totals_seconds.get("exemption_pc_seconds", 0.0)
+    ym_secs = totals_seconds.get("exemption_ym_seconds", 0.0)
+    dist_m = totals_seconds.get("distance_m", 0.0)
+    totals = DurationTotalsResponse(
+        OFF=format_duration_hhmm(totals_seconds["OFF"]),
+        SB=format_duration_hhmm(totals_seconds["SB"]),
+        D=format_duration_hhmm(totals_seconds["D"]),
+        ON=format_duration_hhmm(totals_seconds["ON"]),
+        UNKNOWN=format_duration_hhmm(unk_secs),
+        OFF_seconds=totals_seconds["OFF"],
+        SB_seconds=totals_seconds["SB"],
+        D_seconds=totals_seconds["D"],
+        ON_seconds=totals_seconds["ON"],
+        UNKNOWN_seconds=unk_secs,
+        exemption_pc_seconds=pc_secs,
+        exemption_ym_seconds=ym_secs,
+        exemption_pc=format_duration_hhmm(pc_secs),
+        exemption_ym=format_duration_hhmm(ym_secs),
+        total_hhmm=format_duration_hhmm(total_tracked),
+        covers_full_day=abs(total_tracked - 86400) < 1.0,
+        distance_m=dist_m,
+        distance_mi=round(dist_m / METERS_PER_MILE, 2),
+        distance_km=round(dist_m / 1000.0, 2),
+        distance_label=format_distance_mi(dist_m) if dist_m > 0 else "",
+        D_mi=round(totals_seconds.get("D_m", 0.0) / METERS_PER_MILE, 2),
+        ON_mi=round(totals_seconds.get("ON_m", 0.0) / METERS_PER_MILE, 2),
+        OFF_mi=round(totals_seconds.get("OFF_m", 0.0) / METERS_PER_MILE, 2),
+        SB_mi=round(totals_seconds.get("SB_m", 0.0) / METERS_PER_MILE, 2),
+        exemption_pc_mi=round(totals_seconds.get("exemption_pc_m", 0.0) / METERS_PER_MILE, 2),
+        exemption_ym_mi=round(totals_seconds.get("exemption_ym_m", 0.0) / METERS_PER_MILE, 2),
+    )
+
+    backtest = filter_backtest_markers(
+        load_backtest_dispatches(),
+        driver_id,
+        bounds.start_utc,
+        bounds.end_utc,
+    )
+    live = await _live_audit_markers(session, driver_id, bounds.start_utc, bounds.end_utc)
+    markers = annotate_marker_hours(
+        merge_alert_markers(backtest, live),
+        bounds.timezone,
+    )
+
+    active_ids = set(await IngestionRepository.get_active_driver_ids())
+
+    return DriverDayResponse(
+        driver_id=driver_id,
+        driver_name=driver_name,
+        tenant_id=settings.GEOTAB_DATABASE,
+        date=local_date,
+        timezone=bounds.timezone,
+        day_start_utc=bounds.start_utc,
+        day_end_utc=bounds.end_utc,
+        is_live=driver_id in active_ids,
+        carry_forward_status=carry,
+        events=[DayStatusEventResponse(**e) for e in grid_events],
+        totals=totals,
+        alert_markers=[AlertMarkerResponse(**m) for m in markers],
+    )
 
 
 # ── Health ────────────────────────────────────────────────────────────────
@@ -75,7 +415,72 @@ async def health_check(
     )
 
 
+# ── All Drivers ───────────────────────────────────────────────────────────
+
+
+@router.get("/drivers", response_model=DriverListResponse)
+async def list_drivers(
+    session: AsyncSession = Depends(get_session),
+) -> DriverListResponse:
+    """Return all drivers with historical HOS logs and/or live Redis presence."""
+    drivers = await _list_all_drivers(session)
+    return DriverListResponse(
+        tenant_id=settings.GEOTAB_DATABASE,
+        timezone=settings.DEFAULT_HOME_TERMINAL_TIMEZONE,
+        total=len(drivers),
+        drivers=drivers,
+    )
+
+
 # ── Active Drivers ────────────────────────────────────────────────────────
+
+
+@router.get("/drivers/positions", response_model=DriverPositionsResponse)
+async def get_driver_positions(
+    session: AsyncSession = Depends(get_session),
+) -> DriverPositionsResponse:
+    """Latest non-null lat/lon per driver from canonical HOS logs."""
+    tenant_id = settings.GEOTAB_DATABASE
+    active_ids = set(await IngestionRepository.get_active_driver_ids())
+
+    # PostgreSQL DISTINCT ON: newest event with coordinates per driver
+    stmt = (
+        select(CanonicalHOSLogRecord)
+        .where(
+            CanonicalHOSLogRecord.tenant_id == tenant_id,
+            CanonicalHOSLogRecord.latitude.is_not(None),
+            CanonicalHOSLogRecord.longitude.is_not(None),
+        )
+        .distinct(CanonicalHOSLogRecord.driver_id)
+        .order_by(
+            CanonicalHOSLogRecord.driver_id,
+            CanonicalHOSLogRecord.event_timestamp.desc(),
+        )
+    )
+    result = await session.execute(stmt)
+    records = list(result.scalars().all())
+
+    positions = [
+        DriverPositionResponse(
+            driver_id=rec.driver_id,
+            driver_name=resolve_driver_name(rec.driver_id, rec.driver_name),
+            status=rec.status,
+            latitude=float(rec.latitude),
+            longitude=float(rec.longitude),
+            event_timestamp=rec.event_timestamp,
+            is_live=rec.driver_id in active_ids,
+        )
+        for rec in records
+        if rec.latitude is not None and rec.longitude is not None
+    ]
+    positions.sort(
+        key=lambda p: ((p.driver_name or "").lower(), p.driver_id),
+    )
+    return DriverPositionsResponse(
+        tenant_id=tenant_id,
+        total=len(positions),
+        positions=positions,
+    )
 
 
 @router.get("/drivers/active", response_model=List[DriverStatusResponse])
@@ -117,7 +522,10 @@ async def get_active_drivers(
             responses.append(
                 DriverStatusResponse(
                     driver_id=driver_id,
-                    driver_name=latest_log.driver_name if latest_log else None,
+                    driver_name=resolve_driver_name(
+                        driver_id,
+                        latest_log.driver_name if latest_log else None,
+                    ),
                     tenant_id=tenant_id,
                     current_status=latest_log.status if latest_log else "UNKNOWN",
                     last_event_at=latest_log.event_timestamp if latest_log else None,
@@ -139,6 +547,262 @@ async def get_active_drivers(
             logger.error("Error fetching status for driver %s: %s", driver_id, exc)
 
     return responses
+
+
+# ── Driver Day (home-terminal grid) ───────────────────────────────────────
+
+
+@router.get("/alerts", response_model=FleetAlertsResponse)
+async def list_fleet_alerts(
+    severity: Optional[str] = Query(
+        default=None,
+        description="WARNING | VIOLATION (empty / all = no filter)",
+    ),
+    from_ts: Optional[datetime] = Query(default=None, alias="from"),
+    to_ts: Optional[datetime] = Query(default=None, alias="to"),
+    driver_id: Optional[str] = Query(default=None),
+    source: Optional[str] = Query(
+        default=None, description="backtest | live_audit (empty / all = both)"
+    ),
+    tz: Optional[str] = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+) -> FleetAlertsResponse:
+    """Fleet alerts: merged backtest dispatches + recent live audit violations.
+
+    Empty ``source`` / ``severity`` (and literal ``all``) mean no filter.
+    When both ``from`` and ``to`` are omitted, defaults to the last 30 local days.
+    """
+    display_tz = tz or default_display_timezone()
+    severity = normalize_filter_str(severity)
+    source = normalize_filter_str(source)
+    driver_id = normalize_filter_str(driver_id)
+
+    start = from_ts
+    end = to_ts
+    if start is not None:
+        start = start.replace(tzinfo=timezone.utc) if start.tzinfo is None else start.astimezone(timezone.utc)
+    if end is not None:
+        end = end.replace(tzinfo=timezone.utc) if end.tzinfo is None else end.astimezone(timezone.utc)
+    if start is None and end is None:
+        start, end = default_alerts_utc_window(display_tz)
+
+    live: List[dict] = []
+    if source is None or source.lower() == "live_audit":
+        live = await _fleet_live_audit_markers(session, start, end, driver_id=driver_id)
+
+    backtest = load_backtest_dispatches() if (source is None or source.lower() == "backtest") else []
+    merged = collect_fleet_alerts(
+        backtest,
+        live,
+        severity=severity,
+        driver_id=driver_id,
+        source=source,
+        start_utc=start,
+        end_utc=end,
+    )
+    annotated = annotate_marker_hours(merged, display_tz)
+    zone = zoneinfo_for(display_tz)
+    items: List[FleetAlertItemResponse] = []
+    for m in annotated:
+        as_of = m["as_of"]
+        if isinstance(as_of, datetime):
+            day_date = as_of.astimezone(zone).date().isoformat()
+        else:
+            day_date = ""
+        items.append(
+            FleetAlertItemResponse(
+                as_of=m["as_of"],
+                local_timestamp=str(m.get("local_timestamp", "")),
+                hour_of_day=float(m.get("hour_of_day", 0.0)),
+                driver_id=str(m.get("driver_id", "")),
+                driver_name=resolve_driver_name(
+                    str(m.get("driver_id", "")), m.get("driver_name")
+                ),
+                violation_type=str(m.get("violation_type", "")),
+                severity=str(m.get("severity", "")),
+                rule_ref=str(m.get("rule_ref", "")),
+                description=str(m.get("description", "")),
+                source=str(m.get("source", "")),
+                day_date=day_date,
+            )
+        )
+    return FleetAlertsResponse(total=len(items), timezone=display_tz, alerts=items)
+
+
+def _dispatch_channel(record: dict) -> str:
+    """Infer notification channel from a JSONL dispatch record."""
+    action = str(record.get("dispatch_action", "")).lower()
+    if record.get("voice_call_sid") or "voice" in action:
+        if record.get("sms_sid") or "sms" in action:
+            return "voice+sms"
+        return "voice"
+    if record.get("sms_sid") or "sms" in action:
+        return "sms"
+    if "dry_run" in action or action.startswith("skipped_dry_run"):
+        return "dry-run"
+    if action == "suppressed" or record.get("suppressed"):
+        return "suppressed"
+    return action or "unknown"
+
+
+@router.get("/alerts/dispatch-log", response_model=DispatchLogResponse)
+async def get_alerts_dispatch_log(
+    limit: int = Query(default=50, ge=1, le=500),
+) -> DispatchLogResponse:
+    """Latest Twilio / dry-run dispatch events from the JSONL alert log.
+
+    Read-only — does not place any Twilio calls.
+    """
+    log_path = Path(settings.ALERT_LOG_PATH)
+    raw = read_alert_log(limit=limit)
+    events = [
+        DispatchLogItemResponse(
+            timestamp=str(row.get("timestamp") or "") or None,
+            driver_id=str(row.get("driver_id", "")),
+            driver_name=resolve_driver_name(str(row.get("driver_id", ""))),
+            severity=str(row.get("severity", "")),
+            violation_type=str(row.get("violation_type", "")),
+            channel=_dispatch_channel(row),
+            dispatch_action=str(row.get("dispatch_action", "")),
+            suppressed=bool(row.get("suppressed", False)),
+            description=str(row.get("description", "")),
+            voice_call_sid=row.get("voice_call_sid"),
+            sms_sid=row.get("sms_sid"),
+        )
+        for row in raw
+    ]
+    return DispatchLogResponse(
+        total=len(events),
+        path=str(log_path),
+        events=events,
+    )
+
+
+@router.get("/drivers/{driver_id}/day", response_model=DriverDayResponse)
+async def get_driver_day(
+    driver_id: str,
+    date_str: Optional[str] = Query(
+        default=None,
+        alias="date",
+        description="Local calendar date YYYY-MM-DD (display TZ)",
+    ),
+    tz: Optional[str] = Query(
+        default=None,
+        description="Display IANA timezone (default America/Chicago)",
+    ),
+    session: AsyncSession = Depends(get_session),
+) -> DriverDayResponse:
+    """Return HOS status events, duration totals, and alert markers for one day."""
+    display_tz = tz if tz else default_display_timezone()
+    if date_str:
+        try:
+            local_date = date.fromisoformat(date_str)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="date must be YYYY-MM-DD",
+            ) from exc
+    else:
+        local_date = datetime.now(zoneinfo_for(display_tz)).date()
+
+    return await _build_driver_day(session, driver_id, local_date, display_tz=display_tz)
+
+
+@router.get("/drivers/{driver_id}/alerts/detail", response_model=AlertDetailResponse)
+async def get_alert_detail(
+    driver_id: str,
+    as_of: datetime = Query(..., description="Alert timestamp (UTC or offset)"),
+    violation_type: str = Query(..., description="Violation type enum value"),
+    source: str = Query(default="backtest", description="backtest | live_audit"),
+    tz: Optional[str] = Query(default=None, description="Display IANA timezone"),
+    description: str = Query(default="", description="Original marker description"),
+    severity: str = Query(default="", description="Original marker severity"),
+    rule_ref: str = Query(default="", description="Original marker rule ref"),
+    session: AsyncSession = Depends(get_session),
+) -> AlertDetailResponse:
+    """Recompute compliance at ``as_of`` and return calculation detail + graph context."""
+    display_tz = tz or default_display_timezone()
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
+    else:
+        as_of = as_of.astimezone(timezone.utc)
+
+    tenant_id = settings.GEOTAB_DATABASE
+    lookback = settings.WEEKLY_CYCLE_DAYS + 3
+    cutoff = as_of - timedelta(days=lookback)
+    stmt = (
+        select(CanonicalHOSLogRecord)
+        .where(
+            CanonicalHOSLogRecord.tenant_id == tenant_id,
+            CanonicalHOSLogRecord.driver_id == driver_id,
+            CanonicalHOSLogRecord.event_timestamp >= cutoff,
+            CanonicalHOSLogRecord.event_timestamp <= as_of,
+        )
+        .order_by(CanonicalHOSLogRecord.event_timestamp.asc())
+    )
+    result = await session.execute(stmt)
+    records = list(result.scalars().all())
+    if not records:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No HOS events for driver {driver_id} near {as_of.isoformat()}",
+        )
+
+    db_name = next((r.driver_name for r in records if r.driver_name), None)
+    driver_name = resolve_driver_name(driver_id, db_name)
+    events = logs_to_events(records)
+    payload = build_alert_detail(
+        driver_id=driver_id,
+        tenant_id=tenant_id,
+        driver_name=driver_name,
+        events=events,
+        as_of=as_of,
+        violation_type=violation_type,
+        source=source,
+        display_tz_name=display_tz,
+        description_hint=description,
+        severity_hint=severity,
+        rule_ref_hint=rule_ref,
+    )
+    return AlertDetailResponse.model_validate(payload)
+
+
+@router.get("/drivers/{driver_id}/alert-markers", response_model=AlertMarkersResponse)
+async def get_driver_alert_markers(
+    driver_id: str,
+    from_ts: datetime = Query(..., alias="from", description="UTC window start"),
+    to_ts: datetime = Query(..., alias="to", description="UTC window end (exclusive)"),
+    tz: Optional[str] = Query(default=None, description="Display IANA timezone"),
+    session: AsyncSession = Depends(get_session),
+) -> AlertMarkersResponse:
+    """Merge backtest would-dispatch markers with live audit violations."""
+    if from_ts.tzinfo is None:
+        from_ts = from_ts.replace(tzinfo=timezone.utc)
+    else:
+        from_ts = from_ts.astimezone(timezone.utc)
+    if to_ts.tzinfo is None:
+        to_ts = to_ts.replace(tzinfo=timezone.utc)
+    else:
+        to_ts = to_ts.astimezone(timezone.utc)
+
+    display_tz = tz or default_display_timezone()
+    backtest = filter_backtest_markers(
+        load_backtest_dispatches(),
+        driver_id,
+        from_ts,
+        to_ts,
+    )
+    live = await _live_audit_markers(session, driver_id, from_ts, to_ts)
+    markers = annotate_marker_hours(
+        merge_alert_markers(backtest, live),
+        display_tz,
+    )
+    return AlertMarkersResponse(
+        driver_id=driver_id,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        markers=[AlertMarkerResponse(**m) for m in markers],
+    )
 
 
 # ── Driver Timeline ───────────────────────────────────────────────────────

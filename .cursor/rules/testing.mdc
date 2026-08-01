@@ -1,0 +1,41 @@
+---
+description: Pytest conventions and test structure for dcw-backend
+globs: dcw-backend/tests/**/*
+alwaysApply: false
+---
+
+# Testing Standards
+
+## Tooling
+
+- pytest + pytest-asyncio + pytest-cov
+- Run: `make test` (full suite) or `make test-billing` (single module)
+- CI uses ephemeral Postgres 16 + Redis 7.2 — set `DATABASE_URL` and `REDIS_URL`
+
+## Test Structure (planned layout)
+
+```
+tests/
+├── conftest.py              # Shared fixtures (async session, redis, settings)
+├── unit/                    # Per-rule, normalizer, billing gate tests
+├── fixtures/
+│   ├── golden/              # Versioned with rule pack — primary engine contract
+│   └── providers/           # Anonymized real telematics data
+└── integration/             # Adapter + DB + API (future)
+```
+
+## Patterns
+
+```python
+@pytest.mark.asyncio
+async def test_starter_tier_blocks_voice_ivr():
+    gate = require_tier_capability(lambda caps: caps.allow_voice_ivr)
+    with pytest.raises(HTTPException) as exc_info:
+        await gate(tenant)
+    assert exc_info.value.status_code == 402
+```
+
+- Mark async tests with `@pytest.mark.asyncio`
+- Import directly from `app.*` — no test-only wrappers
+- Engine golden diffs block merge; coverage % is secondary to golden correctness
+- Engine changes require edge-case unit tests per `CONTRIBUTING.md`

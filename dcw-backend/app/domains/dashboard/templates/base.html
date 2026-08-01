@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Sentinel HOS{% endblock %}</title>
+  <link rel="stylesheet" href="/static/dashboard.css" />
+  <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvRhurtJWTsIASrmTdgRDXFCF" crossorigin="anonymous"></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">
+      <a href="/ui/home" class="brand-name">Sentinel HOS</a>
+      <span class="brand-sub">Driver Compliance Watch</span>
+    </div>
+    <nav class="site-nav">
+      <a href="/ui/home" {% if current_path and current_path.startswith('/ui/home') %}class="active"{% endif %}>Home</a>
+      <a href="/ui/drivers" {% if current_path and current_path.startswith('/ui/drivers') %}class="active"{% endif %}>Drivers</a>
+      <a href="/ui/alerts" {% if current_path and current_path.startswith('/ui/alerts') %}class="active"{% endif %}>Alerts</a>
+      <a href="/docs" target="_blank" rel="noopener">API</a>
+    </nav>
+    <form class="tz-form" method="get" action="/ui/preferences/timezone" title="Display timezone for day grids and alert times">
+      <label for="tz-select">Local time</label>
+      <select id="tz-select" name="tz" onchange="this.form.submit()">
+        {% for tz_id, tz_label in display_timezones %}
+        <option value="{{ tz_id }}" {% if tz_id == timezone %}selected{% endif %}>{{ tz_label }}</option>
+        {% endfor %}
+      </select>
+      <input type="hidden" name="next" value="{{ current_path | default('/ui/home') }}" />
+      <span class="tz-abbrev">{{ tz_abbrev | default('') }}</span>
+    </form>
+    <div class="health-strip" id="health-strip"
+         title="DB / Redis / rule pack">
+      <span class="pill {% if health.database == 'healthy' %}ok{% else %}bad{% endif %}">DB</span>
+      <span class="pill {% if health.redis == 'healthy' %}ok{% else %}bad{% endif %}">Redis</span>
+      <span class="pill muted">{{ health.rule_pack_version }}</span>
+      {% if alert_dry_run %}
+      <span class="pill warn">DRY-RUN</span>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="site-main">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <span>Display TZ {{ timezone | default('America/Chicago') }}{% if tz_abbrev %} ({{ tz_abbrev }}){% endif %}</span>
+    <span>Alerts log-only when DRY-RUN</span>
+  </footer>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

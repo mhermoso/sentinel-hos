@@ -1,0 +1,30 @@
+---
+description: Branch naming, commit messages, and PR checklist
+alwaysApply: true
+---
+
+# Git & Contributing
+
+## Branch Prefixes
+
+- `feature/` — new capabilities (e.g. `feature/samsara-webhook-adapter`)
+- `fix/` — bug fixes or precision adjustments (e.g. `fix/split-sleeper-clock-reset`)
+- `adr/` — architectural decision records (e.g. `adr/006-event-store-indexing`)
+- `refactor/` — internal improvements that do not alter deterministic outputs
+
+## Commit Messages (Conventional Commits)
+
+```
+feat(engine): add split-sleeper berth 7/3 evaluation logic
+fix(ingestion): correct timestamp truncation for geotab feeds
+docs(adr): record ADR-005 timezone policy
+test(engine): add 70h/8d rolling window edge cases
+```
+
+## PR Checklist
+
+1. `make test` — all tests pass
+2. `make lint` — Ruff, Mypy, Bandit clean
+3. `make format` — code formatted
+4. Engine changes include edge-case unit tests
+5. Deterministic calculation outputs unchanged (or golden fixtures updated with justification)

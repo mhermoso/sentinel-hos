@@ -23,7 +23,9 @@ from app.domains.ingestion.schemas import CanonicalDutyStatus, DCWCanonicalHOSLo
 
 UTC = timezone.utc
 CHICAGO = ZoneInfo("America/Chicago")
-_DATA_PATH = Path(__file__).resolve().parents[2] / "data" / "hos_10d_canonical.json"
+_DATA_PATH = Path(__file__).resolve().parents[2] / "data" / "hos_30d_canonical.json"
+if not _DATA_PATH.exists():
+    _DATA_PATH = Path(__file__).resolve().parents[2] / "data" / "hos_10d_canonical.json"
 
 
 def _ts(year: int, month: int, day: int, hour: int, minute: int = 0) -> datetime:

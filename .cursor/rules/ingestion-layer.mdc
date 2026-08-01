@@ -1,0 +1,48 @@
+---
+description: Ingestion and telematics normalization rules
+globs: dcw-backend/app/domains/ingestion/**/*
+alwaysApply: false
+---
+
+# Ingestion Layer
+
+## Adapter Pattern
+
+All telematics providers implement `BaseTelematicsAdapter` in `adapters/`:
+
+```python
+class BaseTelematicsAdapter(ABC):
+    @property
+    @abstractmethod
+    def provider_name(self) -> str: ...
+
+    @abstractmethod
+    async def connect(self) -> None: ...
+
+    @abstractmethod
+    async def fetch_feed(self, tenant_id: str, from_cursor: str) -> Tuple[List[DCWCanonicalHOSLog], str]: ...
+```
+
+Implementations: `geotab.py`, `motive.py`, `samsara.py`. Map provider payloads to `DCWCanonicalHOSLog` inside the adapter.
+
+## Normalization (ADR-003)
+
+Before persistence, the normalizer must:
+
+1. Truncate timestamps to 1-second precision (drop sub-second noise)
+2. Round GPS coordinates to 4 decimal places (~11.1 m)
+3. Apply Zero-Order Hold (ZOH) forward-fill across gaps
+4. Override ambiguous off-duty to `DRIVING` when vehicle speed > 5 mph (ECM precedence)
+
+## Integrity & Persistence
+
+- Compute SHA-256 digest over normalized inputs via `app/core/security.py` before writing
+- Append to `canonical_hos_logs` only — never update or delete
+- Store raw provider JSONB alongside canonical fields
+- Update Redis: active driver set, polling cursors (`cursor:{provider}:{tenant_id}`)
+
+## Background Worker
+
+- ARQ worker config: `WorkerSettings` in `poller.py`
+- Cron: `poll_geotab_feed` every 2 min, `sweep_active_drivers` for compliance
+- Use httpx connection pooling for provider HTTP calls

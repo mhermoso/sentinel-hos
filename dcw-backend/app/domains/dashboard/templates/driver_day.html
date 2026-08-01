@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}{{ day.driver_name or day.driver_id }} — {{ day.date }} — Sentinel HOS{% endblock %}
+
+{% block head %}
+<script src="/static/hos_grid.js" defer></script>
+<script src="/static/alert_detail.js" defer></script>
+{% endblock %}
+
+{% block content %}
+<section class="page-head day-head">
+  <div>
+    <a class="back" href="/ui/drivers">← Drivers</a>
+    <h1>{{ day.driver_name or day.driver_id }}</h1>
+    <p class="lede muted">
+      {{ day.driver_id }}
+      ·
+      {% if day.is_live %}<span class="badge live">Live</span>{% else %}<span class="badge hist">Historical</span>{% endif %}
+      · {{ day.timezone }}{% if tz_abbrev %} ({{ tz_abbrev }}){% endif %}
+    </p>
+  </div>
+  <div class="date-nav">
+    <a class="btn-sm" href="/ui/drivers/{{ day.driver_id }}?date={{ prev_date }}">← Prev</a>
+    <form class="date-form" method="get" action="/ui/drivers/{{ day.driver_id }}">
+      <input type="date" name="date" value="{{ day.date.isoformat() }}" onchange="this.form.submit()" />
+    </form>
+    <a class="btn-sm" href="/ui/drivers/{{ day.driver_id }}?date={{ next_date }}">Next →</a>
+    <a class="btn-sm" href="/ui/drivers/{{ day.driver_id }}?date={{ today }}">Today</a>
+  </div>
+</section>
+
+<section
+  id="day-panel"
+  class="panel"
+  hx-get="/ui/drivers/{{ day.driver_id }}/partial?date={{ day.date.isoformat() }}"
+  hx-trigger="every 45s"
+  hx-swap="innerHTML"
+  hx-select="#day-grid-root">
+  {% include "partials/day_grid.html" %}
+</section>
+
+{% if available_dates %}
+<details class="dates-details">
+  <summary>Days with data ({{ available_dates|length }})</summary>
+  <div class="date-chips">
+    {% for d in available_dates %}
+    <a href="/ui/drivers/{{ day.driver_id }}?date={{ d }}" {% if d == day.date.isoformat() %}class="active"{% endif %}>{{ d }}</a>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+
+<div id="alert-drawer" class="alert-drawer" aria-hidden="true">
+  <div class="alert-drawer-backdrop" onclick="window.AlertDetail && window.AlertDetail.close()"></div>
+  <aside class="alert-drawer-panel" role="dialog" aria-label="Alert calculation details">
+    <div class="alert-drawer-toolbar">
+      <button type="button" class="btn-sm" data-drawer-expand
+              onclick="window.AlertDetail && window.AlertDetail.toggleFullscreen()">Expand</button>
+      <button type="button" class="btn-sm drawer-close"
+              onclick="window.AlertDetail && window.AlertDetail.close()">Close</button>
+    </div>
+    <div id="alert-drawer-body">
+      <p class="muted" style="padding:1.5rem">Select an alert marker to see calculation details.</p>
+    </div>
+  </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.body.addEventListener("htmx:afterSwap", (ev) => {
+    const target = ev.target;
+    if (!target) return;
+    if (target.id === "day-panel" || target.id === "day-grid-root") {
+      window.HOSGrid && window.HOSGrid.mountAll(target);
+      window.AlertDetail && window.AlertDetail.bindMarkerButtons(target);
+    }
+    if (target.id === "alert-drawer-body") {
+      window.AlertDetail && window.AlertDetail.mount(target);
+    }
+  });
+  // Initial bind (in case inline script in partial ran before alert_detail.js)
+  window.AlertDetail && window.AlertDetail.bindMarkerButtons();
+</script>
+{% endblock %}
+

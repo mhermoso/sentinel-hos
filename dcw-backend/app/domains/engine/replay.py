@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.config import settings
 from app.domains.engine.schemas import DriverTimeline
+from app.domains.ingestion.duty_filter import should_skip_duty_status_change
 from app.domains.ingestion.schemas import CanonicalDutyStatus, DCWCanonicalHOSLog
 
 _DUTY_STATUSES = {
@@ -19,6 +20,7 @@ _DUTY_STATUSES = {
 _REST_STATUSES = {
     CanonicalDutyStatus.OFF_DUTY.value,
     CanonicalDutyStatus.SLEEPER_BERTH.value,
+    CanonicalDutyStatus.PERSONAL_CONVEYANCE.value,
 }
 
 RESTART_SECONDS: float = 34 * 3600.0
@@ -38,7 +40,7 @@ def logs_to_timeline_events(
             timestamp=log.event_timestamp,
         )
         for log in sorted_logs
-        if log.status != CanonicalDutyStatus.UNKNOWN
+        if not should_skip_duty_status_change(log.status, log.raw_payload)
     ]
 
 

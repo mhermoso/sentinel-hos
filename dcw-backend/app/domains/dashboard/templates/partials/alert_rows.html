@@ -1,0 +1,33 @@
+{% if alerts %}
+{% for a in alerts %}
+<tr
+  class="alert-row"
+  data-alert-open
+  data-driver-id="{{ a.driver_id }}"
+  data-as-of="{{ a.as_of.isoformat() if a.as_of is not string else a.as_of }}"
+  data-violation-type="{{ a.violation_type }}"
+  data-source="{{ a.source }}"
+  data-severity="{{ a.severity }}"
+  data-rule-ref="{{ a.rule_ref }}"
+  data-description="{{ a.description }}">
+  <td class="mono">{{ a.local_timestamp }}</td>
+  <td>
+    <strong>{{ a.driver_name or a.driver_id }}</strong>
+    <div class="muted small">{{ a.driver_id }}</div>
+  </td>
+  <td>{{ a.violation_type }}</td>
+  <td><span class="sev sev-{{ a.severity }}">{{ a.severity }}</span></td>
+  <td class="source">{{ a.source }}</td>
+  <td class="desc">{{ a.description }}</td>
+  <td>
+    {% if a.day_date %}
+    <a class="btn-sm" href="/ui/drivers/{{ a.driver_id }}?date={{ a.day_date }}" onclick="event.stopPropagation()">Day</a>
+    {% endif %}
+  </td>
+</tr>
+{% endfor %}
+{% else %}
+<tr>
+  <td colspan="7" class="muted">No alerts match the current filters.</td>
+</tr>
+{% endif %}

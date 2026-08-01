@@ -36,8 +36,12 @@ logger = logging.getLogger("dcw.engine.state_machine")
 # Qualifying off-duty rest to start a new shift (10 consecutive hours)
 QUALIFYING_OFF_DUTY_SECONDS: float = 10 * 3600.0
 
-# Off-duty statuses that count toward rest (OFF or SB)
-_REST_STATUSES = {CanonicalDutyStatus.OFF_DUTY, CanonicalDutyStatus.SLEEPER_BERTH}
+# Off-duty statuses that count toward rest (OFF, SB, or personal conveyance)
+_REST_STATUSES = {
+    CanonicalDutyStatus.OFF_DUTY,
+    CanonicalDutyStatus.SLEEPER_BERTH,
+    CanonicalDutyStatus.PERSONAL_CONVEYANCE,
+}
 
 # On-duty statuses that count against the 14h window and weekly cycle
 _DUTY_STATUSES = {

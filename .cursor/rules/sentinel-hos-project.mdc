@@ -1,0 +1,32 @@
+---
+description: Sentinel HOS project context and five-layer architecture
+alwaysApply: true
+---
+
+# Sentinel HOS — Project Context
+
+**Product:** FMCSA 49 CFR Part 395 Hours-of-Service compliance platform (deterministic, auditable).
+
+**Primary app:** `dcw-backend/` — Python 3.12, FastAPI, Pydantic v2, PostgreSQL 16, Redis 7.2. No TypeScript in this repo.
+
+**Architecture reference:** `end-to-end.md` and `dcw-backend/docs/adrs/`. ADRs are binding.
+
+## Five-Layer Pipeline
+
+1. **Ingestion** (`dcw-ingestion`) — ARQ cron poller → provider adapter → normalizer → SHA-256 hash → persist
+2. **Persistence** — PostgreSQL append-only event store + Redis (cursors, active drivers, pub/sub, alert locks)
+3. **Engine** (`dcw-engine`) — Rule pack state machine, deterministic calculators, audit record builder
+4. **Notifier** (`dcw-notifier`) — Redis `compliance_alerts` subscriber → alert lock suppression → Twilio Voice/SMS
+5. **Dashboard** (`dcw-dashboard`) — FastAPI REST/HTMX queries against Redis + PostgreSQL
+
+## Data Flow Rules
+
+- Telematics feeds (Geotab, Motive, Samsara) enter only through ingestion adapters.
+- All provider data maps to `DCWCanonicalHOSLog` before persistence.
+- Engine evaluates timelines; every audit record binds `inputs_hash` + `rule_pack_version`.
+- Violations publish to Redis pub/sub; notifier handles telephony with idempotent alert locks.
+- `canonical_hos_logs` and `audit_records` are append-only — never UPDATE or DELETE.
+
+## Dev Commands
+
+Use `dcw-backend/Makefile`: `make dev`, `make worker`, `make test`, `make lint`, `make format`.
