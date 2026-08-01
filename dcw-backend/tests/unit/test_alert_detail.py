@@ -92,6 +92,44 @@ def test_driving_limit_detail_explanation() -> None:
     assert detail["clocks"]["driving_used_h"] >= 11.0
     assert any(s["step"] == "11-hour driving limit" for s in detail["explanation"])
     assert detail["context_events"]
+    assert detail["weekly_restart"]["had_restart"] is False
+    assert "unbroken rolling" in detail["weekly_restart"]["message"]
+    assert detail["clocks"]["weekly_window_subtitle"] == "rolling window"
+    assert any(s["step"] == "Weekly cycle (context)" for s in detail["explanation"])
+
+
+def test_driving_limit_with_restart_shows_weekly_section() -> None:
+    """DRIVING_LIMIT after valid 34h restart — weekly section shows reset, gauge annotated."""
+    start = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
+    events = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=start),
+        DriverTimeline.HOSEvent(
+            status=CanonicalDutyStatus.OFF_DUTY.value,
+            timestamp=start + timedelta(hours=20),
+        ),
+        DriverTimeline.HOSEvent(
+            status=CanonicalDutyStatus.DRIVING.value,
+            timestamp=start + timedelta(hours=20 + 36),
+        ),
+    ]
+    as_of = start + timedelta(hours=20 + 36 + 12)
+    detail = build_alert_detail(
+        driver_id="drv1",
+        tenant_id="tenant1",
+        driver_name="Test Driver",
+        events=events,
+        as_of=as_of,
+        violation_type="DRIVING_LIMIT",
+        source="backtest",
+        display_tz_name="America/Chicago",
+    )
+    assert detail["weekly_restart"]["had_restart"] is True
+    assert detail["weekly_restart"]["restart_at_local"] is not None
+    assert "34h OFF/SB" in detail["weekly_restart"]["message"]
+    assert detail["clocks"]["weekly_window_subtitle"] == "after 34h restart"
+    assert detail["clocks"]["had_34h_restart"] is True
+    assert any(s["step"] == "Weekly cycle (context)" for s in detail["explanation"])
+    assert not any(s["step"] == "Weekly window start" for s in detail["explanation"])
 
 
 def test_weekly_detail_mentions_restart_window() -> None:
@@ -122,6 +160,8 @@ def test_weekly_detail_mentions_restart_window() -> None:
     )
     assert detail["clocks"]["weekly_used_h"] < 5.0
     assert detail["clocks"]["had_34h_restart"] is True
+    assert detail["weekly_restart"]["had_restart"] is True
+    assert detail["clocks"]["weekly_window_subtitle"] == "after 34h restart"
     assert any("restart" in s["note"].lower() or "Restart" in s["value"] or "restart" in s["step"].lower()
                or "34" in s["note"]
                for s in detail["explanation"]) or detail["clocks"]["had_34h_restart"]

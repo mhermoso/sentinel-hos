@@ -31,6 +31,26 @@
     </div>
   </section>
 
+  {% if detail.weekly_restart %}
+  <section class="detail-section" id="weekly-restart-section">
+    <h3>Weekly / 34h restart</h3>
+    {% if detail.weekly_restart.had_restart %}
+    <p>
+      <strong>34h restart applied</strong>
+      <span class="mono">{{ detail.weekly_restart.restart_at_local }}</span>
+    </p>
+    {% else %}
+    <p><strong>No valid 34h restart in the rolling window</strong></p>
+    {% endif %}
+    <p class="muted small">{{ detail.weekly_restart.message }}</p>
+    <p class="muted small">
+      Weekly window starts:
+      <span class="mono">{{ detail.weekly_restart.weekly_window_start_local }}</span>
+      · counted as <em>{{ detail.weekly_restart.window_mode_label }}</em>
+    </p>
+  </section>
+  {% endif %}
+
   {% if detail.shift_window %}
   <section class="detail-section">
     <h3>Shift / clock window</h3>
@@ -55,11 +75,6 @@
     </ol>
     {% if detail.overage_seconds %}
     <p class="mono">Overage: {{ '%.1f'|format(detail.overage_seconds / 3600) }}h</p>
-    {% endif %}
-    {% if detail.clocks.had_34h_restart %}
-    <p class="hint">Valid 34h restart applied
-      {% if detail.clocks.last_valid_restart_at %}at {{ detail.clocks.last_valid_restart_at }}{% endif %}
-    </p>
     {% endif %}
   </section>
 

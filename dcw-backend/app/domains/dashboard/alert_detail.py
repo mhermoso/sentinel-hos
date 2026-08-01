@@ -99,6 +99,58 @@ def _segment_highlighted(
     return False
 
 
+def _restart_applies_in_window(
+    reset_point: Optional[datetime],
+    as_of: datetime,
+) -> bool:
+    """True when a valid 34h restart falls inside the rolling weekly window."""
+    if reset_point is None:
+        return False
+    window_start = _ensure_utc(as_of) - timedelta(days=settings.WEEKLY_CYCLE_DAYS)
+    return _ensure_utc(reset_point) > window_start
+
+
+def _build_weekly_restart_section(
+    *,
+    reset_point: Optional[datetime],
+    as_of: datetime,
+    tz: ZoneInfo,
+) -> Dict[str, Any]:
+    """Dedicated weekly / 34h restart context for every alert type."""
+    as_of = _ensure_utc(as_of)
+    cycle_days = settings.WEEKLY_CYCLE_DAYS
+    window_start = as_of - timedelta(days=cycle_days)
+    applies = _restart_applies_in_window(reset_point, as_of)
+
+    if applies and reset_point is not None:
+        restart_local = _local_label(reset_point, tz)
+        return {
+            "had_restart": True,
+            "restart_at_utc": reset_point.isoformat(),
+            "restart_at_local": restart_local,
+            "window_mode": "after_34h_restart",
+            "window_mode_label": "after 34h restart",
+            "weekly_window_start_local": restart_local,
+            "message": (
+                f"Valid 34h restart at {restart_local}. "
+                "Weekly duty is counted from that reset (34h OFF/SB plus two "
+                "home-terminal 1–5 AM periods)."
+            ),
+        }
+    return {
+        "had_restart": False,
+        "restart_at_utc": None,
+        "restart_at_local": None,
+        "window_mode": "rolling_window",
+        "window_mode_label": "rolling window",
+        "weekly_window_start_local": _local_label(window_start, tz),
+        "message": (
+            f"No valid 34h restart in the rolling window — weekly clock is "
+            f"unbroken rolling {cycle_days}-day."
+        ),
+    }
+
+
 def _build_shift_window(
     *,
     violation_type: str,
@@ -266,6 +318,14 @@ def _build_explanation(
                         else f"{_hours(max(0.0, remaining))}h remaining"
                     ),
                     "note": "Alert fires at limit or within the warning threshold",
+                },
+                {
+                    "step": "Weekly cycle (context)",
+                    "value": "See Weekly / 34h restart",
+                    "note": (
+                        "The weekly gauge reflects on-duty hours since a valid 34h restart "
+                        "or an unbroken rolling window — not part of this 11h shift alert."
+                    ),
                 },
             ]
         )
@@ -453,6 +513,12 @@ def build_alert_detail(
         driving_used = state.current_shift.cumulative_driving_seconds
     duty_used = state.duty_window_elapsed_seconds
     weekly_limit = settings.WEEKLY_CYCLE_LIMIT_HOURS
+    weekly_restart = _build_weekly_restart_section(
+        reset_point=reset_point,
+        as_of=as_of,
+        tz=tz,
+    )
+    restart_applies = weekly_restart["had_restart"]
 
     explanation = _build_explanation(
         violation_type=violation_type,
@@ -513,12 +579,16 @@ def build_alert_detail(
             "driving_since_break_h": _hours(state.driving_since_break_seconds),
             "consecutive_rest_h": _hours(state.consecutive_rest_seconds),
             "last_valid_restart_at": (
-                state.last_valid_restart_at.isoformat()
-                if getattr(state, "last_valid_restart_at", None)
-                else (reset_point.isoformat() if reset_point else None)
+                weekly_restart["restart_at_utc"]
+                if restart_applies
+                else None
             ),
-            "had_34h_restart": bool(getattr(state, "had_34h_restart", False) or reset_point),
+            "last_valid_restart_at_local": weekly_restart.get("restart_at_local"),
+            "had_34h_restart": restart_applies,
+            "weekly_window_mode": weekly_restart["window_mode"],
+            "weekly_window_subtitle": weekly_restart["window_mode_label"],
         },
+        "weekly_restart": weekly_restart,
         "explanation": explanation,
         "overage_seconds": overage,
         "context_events": context,

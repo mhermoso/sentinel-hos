@@ -316,7 +316,10 @@ class AlertClocksResponse(BaseModel):
     driving_since_break_h: float = 0.0
     consecutive_rest_h: float = 0.0
     last_valid_restart_at: Optional[str] = None
+    last_valid_restart_at_local: Optional[str] = None
     had_34h_restart: bool = False
+    weekly_window_mode: str = "rolling_window"
+    weekly_window_subtitle: str = "rolling window"
 
 
 class AlertContextEventResponse(BaseModel):
@@ -362,6 +365,18 @@ class AlertShiftWindowResponse(BaseModel):
     note: str = ""
 
 
+class AlertWeeklyRestartResponse(BaseModel):
+    """34h restart applied-or-not context for the weekly clock."""
+
+    had_restart: bool = False
+    restart_at_utc: Optional[str] = None
+    restart_at_local: Optional[str] = None
+    window_mode: str = "rolling_window"
+    window_mode_label: str = "rolling window"
+    weekly_window_start_local: str = ""
+    message: str = ""
+
+
 class AlertDetailResponse(BaseModel):
     """Full calculation detail payload for an alert marker click."""
 
@@ -372,6 +387,7 @@ class AlertDetailResponse(BaseModel):
     context_events: List[AlertContextEventResponse] = Field(default_factory=list)
     context_window: Dict[str, Any] = Field(default_factory=dict)
     shift_window: Optional[AlertShiftWindowResponse] = None
+    weekly_restart: Optional[AlertWeeklyRestartResponse] = None
     day_date: str = ""
 
 

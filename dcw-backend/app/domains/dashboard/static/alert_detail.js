@@ -97,6 +97,7 @@
         used: clocks.weekly_used_h,
         limit: clocks.weekly_limit_h,
         remaining: clocks.weekly_remaining_h,
+        subtitle: clocks.weekly_window_subtitle || "",
       },
     ];
 
@@ -116,6 +117,8 @@
           <div class="gauge-limit"></div>
         </div>
         <div class="gauge-meta muted">${
+          row.subtitle ? row.subtitle + " · " : ""
+        }${
           over
             ? (row.used - row.limit).toFixed(1) + "h over"
             : Number(row.remaining).toFixed(1) + "h remaining"

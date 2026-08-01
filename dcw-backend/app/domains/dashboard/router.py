@@ -365,7 +365,7 @@ async def _build_driver_day(
     )
 
     backtest = filter_backtest_markers(
-        load_backtest_dispatches(),
+        await load_backtest_dispatches(),
         driver_id,
         bounds.start_utc,
         bounds.end_utc,
@@ -518,7 +518,7 @@ async def get_driver_positions(
 
     start, end = default_alerts_utc_window(default_display_timezone())
     live = await _fleet_live_audit_markers(session, start, end, driver_id=None)
-    backtest = load_backtest_dispatches()
+    backtest = await load_backtest_dispatches()
     merged = collect_fleet_alerts(
         backtest,
         live,
@@ -700,7 +700,7 @@ async def list_fleet_alerts(
     if source is None or source.lower() == "live_audit":
         live = await _fleet_live_audit_markers(session, start, end, driver_id=driver_id)
 
-    backtest = load_backtest_dispatches() if (source is None or source.lower() == "backtest") else []
+    backtest = await load_backtest_dispatches() if (source is None or source.lower() == "backtest") else []
     merged = collect_fleet_alerts(
         backtest,
         live,
@@ -989,7 +989,7 @@ async def get_driver_alert_markers(
 
     display_tz = tz or default_display_timezone()
     backtest = filter_backtest_markers(
-        load_backtest_dispatches(),
+        await load_backtest_dispatches(),
         driver_id,
         from_ts,
         to_ts,

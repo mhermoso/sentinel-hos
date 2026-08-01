@@ -26,6 +26,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from app.core.config import settings
+from app.core.redis import get_redis
+from app.domains.engine.backtest_runner import backtest_dispatches_key
 from app.domains.ingestion.duty_filter import should_skip_duty_status_change
 
 logger = logging.getLogger("dcw.dashboard.day_builder")
@@ -470,10 +472,34 @@ def attach_alerts_to_segments(
     return grid_events
 
 
-def load_backtest_dispatches(
+def _rows_from_dispatch_payload(payload: Any) -> List[Dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("dispatches") or payload.get("dispatch_events") or []
+    return list(rows) if isinstance(rows, list) else []
+
+
+async def load_backtest_dispatches(
     path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
-    """Load would-dispatch markers written by ``scripts/backtest_alerts.py``."""
+    """Load would-dispatch markers from Redis (online) or local JSON (dev fallback)."""
+    tenant_id = settings.GEOTAB_DATABASE
+    if tenant_id:
+        try:
+            redis = await get_redis()
+            raw = await redis.get(backtest_dispatches_key(tenant_id))
+            if raw:
+                payload = json.loads(raw)
+                rows = _rows_from_dispatch_payload(payload)
+                if rows:
+                    return rows
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            logger.warning(
+                "Failed to load backtest dispatches from Redis (%s): %s",
+                backtest_dispatches_key(tenant_id),
+                exc,
+            )
+
     dispatch_path = path or DEFAULT_BACKTEST_DISPATCHES_PATH
     if not dispatch_path.exists():
         return []
@@ -483,8 +509,7 @@ def load_backtest_dispatches(
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Failed to load backtest dispatches from %s: %s", dispatch_path, exc)
         return []
-    rows = payload.get("dispatches") or payload.get("dispatch_events") or []
-    return list(rows) if isinstance(rows, list) else []
+    return _rows_from_dispatch_payload(payload)
 
 
 def _parse_iso_dt(value: Any) -> Optional[datetime]:

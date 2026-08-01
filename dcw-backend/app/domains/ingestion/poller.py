@@ -35,6 +35,7 @@ from app.domains.dashboard.driver_names import (
     save_driver_names_to_redis,
     warm_driver_name_cache,
 )
+from app.domains.engine.backtest_seed import maybe_run_backtest_seed
 from app.domains.ingestion.history_backfill import maybe_run_history_backfill
 from app.domains.ingestion.normalizer import normalize_batch
 from app.domains.ingestion.repository import IngestionRepository
@@ -80,6 +81,10 @@ async def startup(ctx: dict[str, Any]) -> None:
                 await maybe_run_history_backfill(_geotab_adapter)
             except Exception as exc:
                 logger.error("History backfill failed: %s — continuing with live poll", exc)
+            try:
+                await maybe_run_backtest_seed()
+            except Exception as exc:
+                logger.error("Backtest seed failed: %s — continuing with live poll", exc)
     else:
         logger.warning(
             "Geotab credentials not configured — ingestion poller will idle until "

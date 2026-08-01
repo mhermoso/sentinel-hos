@@ -145,6 +145,17 @@ class Settings(BaseSettings):
         default=30,
         description="LogRecord GPS lookback window for startup history backfill",
     )
+    BACKTEST_SEED_ON_STARTUP: bool = Field(
+        default=True,
+        description=(
+            "When true, the ARQ worker runs a one-shot event-mode backtest over "
+            "the last BACKTEST_SEED_DAYS of Postgres HOS and stores dispatches in Redis."
+        ),
+    )
+    BACKTEST_SEED_DAYS: int = Field(
+        default=30,
+        description="HOS lookback window for startup backtest dispatch seed",
+    )
 
 
 settings = Settings()

@@ -19,12 +19,11 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from app.core.config import settings
-from app.core.security import compute_inputs_hash
-from app.domains.engine.replay import compute_weekly_duty_seconds, logs_to_timeline_events
-from app.domains.engine.rule_pack import RulePack
-from app.domains.engine.schemas import DriverTimeline, Violation
+from app.domains.engine.backtest_runner import (
+    run_backtest,
+    serialize_dispatch_payload,
+)
 from app.domains.ingestion.schemas import DCWCanonicalHOSLog
-from app.domains.notifier.backtest_lock import InMemoryAlertLock
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("dcw.scripts.backtest_alerts")
@@ -39,171 +38,16 @@ def load_grouped_json(path: Path) -> Dict[str, List[DCWCanonicalHOSLog]]:
     return grouped
 
 
-def build_driver_name_map(
-    grouped: Dict[str, List[DCWCanonicalHOSLog]],
-) -> Dict[str, str | None]:
-    """Resolve driver_id → display name from the first log record that carries one."""
-    names: Dict[str, str | None] = {}
-    for driver_id, logs in grouped.items():
-        driver_name: str | None = None
-        for log in logs:
-            if log.driver_name:
-                driver_name = log.driver_name
-                break
-        names[driver_id] = driver_name
-    return names
-
-
-def _evaluation_points_event(events: List[DriverTimeline.HOSEvent]) -> List[datetime]:
-    return sorted({e.timestamp for e in events})
-
-
-def _evaluation_points_sweeper(
-    start: datetime,
-    end: datetime,
-    interval_seconds: int,
-) -> List[datetime]:
-    points: List[datetime] = []
-    cursor = start
-    while cursor <= end:
-        points.append(cursor)
-        cursor += timedelta(seconds=interval_seconds)
-    return points
-
-
-def _shift_id(as_of: datetime) -> str:
-    return as_of.astimezone(timezone.utc).strftime("%Y%m%d")
-
-
-def run_backtest(
-    grouped: Dict[str, List[DCWCanonicalHOSLog]],
-    mode: str,
-    interval_seconds: int,
-) -> Dict[str, Any]:
-    pack = RulePack(version=settings.DEFAULT_RULE_PACK_VERSION)
-    lock = InMemoryAlertLock()
-    driver_names = build_driver_name_map(grouped)
-
-    raw_violations: List[Dict[str, Any]] = []
-    dispatch_events: List[Dict[str, Any]] = []
-    raw_counter: Counter[str] = Counter()
-    dispatch_counter: Counter[str] = Counter()
-    driver_dispatch_counts: Counter[str] = Counter()
-    driver_raw_counts: Counter[str] = Counter()
-
-    all_timestamps: List[datetime] = []
-    tenant_id = settings.GEOTAB_DATABASE or "unknown"
-
-    for driver_id, logs in grouped.items():
-        if not logs:
-            continue
-        tenant_id = logs[0].tenant_id
-        events = logs_to_timeline_events(logs)
-        if not events:
-            continue
-
-        timeline = DriverTimeline(driver_id=driver_id, tenant_id=tenant_id, events=events)
-        all_timestamps.extend(e.timestamp for e in events)
-
-        if mode == "event":
-            eval_points = _evaluation_points_event(events)
-        else:
-            start = min(e.timestamp for e in events)
-            end = max(e.timestamp for e in events)
-            eval_points = _evaluation_points_sweeper(start, end, interval_seconds)
-
-        for as_of in eval_points:
-            weekly = compute_weekly_duty_seconds(
-                events,
-                as_of=as_of,
-                cycle_days=settings.WEEKLY_CYCLE_DAYS,
-            )
-            inputs_hash = compute_inputs_hash(
-                {
-                    "tenant_id": tenant_id,
-                    "driver_id": driver_id,
-                    "as_of": as_of.isoformat(),
-                    "event_count": len(events),
-                }
-            )
-            result = pack.evaluate(
-                timeline,
-                inputs_hash=inputs_hash,
-                weekly_duty_seconds=weekly,
-                as_of=as_of,
-            )
-
-            for violation in result.violations:
-                key = f"{violation.violation_type.value}:{violation.severity.value}"
-                raw_counter[key] += 1
-                driver_raw_counts[driver_id] += 1
-                raw_violations.append(
-                    {
-                        "driver_id": driver_id,
-                        "driver_name": driver_names.get(driver_id),
-                        "as_of": as_of.isoformat(),
-                        "violation_type": violation.violation_type.value,
-                        "severity": violation.severity.value,
-                        "description": violation.description,
-                        "rule_ref": violation.rule_ref,
-                    }
-                )
-
-                shift = _shift_id(as_of)
-                if lock.would_dispatch(
-                    tenant_id,
-                    driver_id,
-                    shift,
-                    violation.violation_type.value,
-                    violation.severity.value,
-                ):
-                    dispatch_counter[key] += 1
-                    driver_dispatch_counts[driver_id] += 1
-                    dispatch_events.append(
-                        {
-                            "driver_id": driver_id,
-                            "driver_name": driver_names.get(driver_id),
-                            "as_of": as_of.isoformat(),
-                            "violation_type": violation.violation_type.value,
-                            "severity": violation.severity.value,
-                            "rule_ref": violation.rule_ref,
-                            "description": violation.description,
-                        }
-                    )
-
-    date_range = {}
-    if all_timestamps:
-        date_range = {
-            "from": min(all_timestamps).isoformat(),
-            "to": max(all_timestamps).isoformat(),
-        }
-
-    return {
-        "meta": {
-            "mode": mode,
-            "interval_seconds": interval_seconds if mode == "sweeper" else None,
-            "rule_pack_version": settings.DEFAULT_RULE_PACK_VERSION,
-            "tenant_id": tenant_id,
-            "driver_count": len(grouped),
-            "total_events": sum(len(v) for v in grouped.values()),
-            "date_range": date_range,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-        },
-        "summary": {
-            "raw_violation_count": sum(raw_counter.values()),
-            "would_dispatch_count": sum(dispatch_counter.values()),
-            "by_rule_severity_raw": dict(raw_counter),
-            "by_rule_severity_dispatch": dict(dispatch_counter),
-            "top_drivers_by_dispatch": driver_dispatch_counts.most_common(10),
-            "driver_dispatch_counts": dict(driver_dispatch_counts),
-            "driver_raw_counts": dict(driver_raw_counts),
-            "driver_names": driver_names,
-        },
-        "dispatch_events": dispatch_events,
-        "raw_violations": raw_violations,
-        "sample_dispatches": dispatch_events[:50],
-        "raw_violations_sample": raw_violations[:100],
-    }
+def write_backtest_dispatches(
+    result: Dict[str, Any],
+    output_path: Path,
+) -> Path:
+    """Write would-dispatch events for the HOS timeline dashboard UI."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = serialize_dispatch_payload(result)
+    with output_path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+    return output_path
 
 
 def _report_stem(ts: str, mode: str) -> str:
@@ -453,25 +297,6 @@ def write_html_report(result: Dict[str, Any], reports_dir: Path, ts: str) -> Pat
 
     path.write_text(doc, encoding="utf-8")
     return path
-
-
-def write_backtest_dispatches(
-    result: Dict[str, Any],
-    output_path: Path,
-) -> Path:
-    """Write would-dispatch events for the HOS timeline dashboard UI."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "meta": result["meta"],
-        "summary": {
-            "raw_violation_count": result["summary"]["raw_violation_count"],
-            "would_dispatch_count": result["summary"]["would_dispatch_count"],
-        },
-        "dispatches": result.get("dispatch_events", []),
-    }
-    with output_path.open("w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2)
-    return output_path
 
 
 def write_reports(
