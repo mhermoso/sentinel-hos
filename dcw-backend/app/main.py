@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
@@ -99,7 +100,13 @@ async def on_shutdown() -> None:
     logger.info("DCW application shutdown complete")
 
 
-# ── Legacy health endpoint (keep for backward compat) ────────────────────
+# ── Root + legacy health ─────────────────────────────────────────────────
+
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """Send bare app URL to the HTMX dashboard home."""
+    return RedirectResponse(url="/ui/home", status_code=302)
+
 
 @app.get("/health", tags=["system"])
 async def health_check_root() -> dict:
