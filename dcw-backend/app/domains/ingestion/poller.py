@@ -262,10 +262,7 @@ class WorkerSettings:
     ]
     on_startup = startup
     on_shutdown = shutdown
-    redis_settings = RedisSettings(
-        host=settings.REDIS_HOST,
-        port=settings.REDIS_PORT,
-        database=settings.REDIS_DB,
-    )
+    # Parse from REDIS_URL so managed rediss:// (TLS) endpoints work.
+    redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
     max_jobs = 5
     job_timeout = 300  # 5-minute timeout per poll cycle
