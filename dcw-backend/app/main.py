@@ -1,0 +1,98 @@
+"""Driver Compliance Watch — FastAPI application entry point.
+
+Registers all routers and manages async lifecycle hooks for:
+  - PostgreSQL (SQLAlchemy async engine)
+  - Redis (connection pool + pub/sub subscriber)
+  - Compliance alert subscriber (background task)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.config import settings
+from app.core.database import close_db, init_db
+from app.core.redis import close_redis, init_redis
+from app.domains.dashboard.router import router as dashboard_router
+from app.domains.notifier.subscriber import run_subscriber_loop
+
+logger = logging.getLogger("dcw.main")
+
+app = FastAPI(
+    title=settings.APP_NAME,
+    version="1.0.0",
+    description=(
+        "Driver Compliance Watch — Deterministic 49 CFR Part 395 HOS "
+        "compliance platform. Real-time telematics ingestion, rule-pack "
+        "evaluation, and automated Twilio alerting."
+    ),
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+# ── CORS ─────────────────────────────────────────────────────────────────
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if settings.DEBUG else [],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Routers ───────────────────────────────────────────────────────────────
+
+app.include_router(dashboard_router)
+
+# ── Lifecycle ─────────────────────────────────────────────────────────────
+
+_subscriber_task: asyncio.Task | None = None
+
+
+@app.on_event("startup")
+async def on_startup() -> None:
+    """Initialize database, Redis, and start the alert subscriber."""
+    global _subscriber_task
+
+    logger.info("Starting DCW application (environment=%s)", settings.ENVIRONMENT)
+
+    await init_db()
+    logger.info("PostgreSQL connection pool ready")
+
+    await init_redis()
+    logger.info("Redis connection pool ready")
+
+    # Start the compliance alert subscriber as a background task
+    _subscriber_task = asyncio.create_task(run_subscriber_loop())
+    logger.info("Compliance alert subscriber started")
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    """Graceful shutdown — cancel subscriber and close connections."""
+    global _subscriber_task
+
+    logger.info("Shutting down DCW application…")
+
+    if _subscriber_task and not _subscriber_task.done():
+        _subscriber_task.cancel()
+        try:
+            await _subscriber_task
+        except asyncio.CancelledError:
+            pass
+
+    await close_redis()
+    await close_db()
+    logger.info("DCW application shutdown complete")
+
+
+# ── Legacy health endpoint (keep for backward compat) ────────────────────
+
+@app.get("/health", tags=["system"])
+async def health_check_root() -> dict:
+    """Minimal root health check (see /api/health for extended check)."""
+    return {"status": "healthy", "environment": settings.ENVIRONMENT}

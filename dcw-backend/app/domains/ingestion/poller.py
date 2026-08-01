@@ -1,0 +1,143 @@
+"""ARQ background worker for continuous telematics feed polling.
+
+Runs as a standalone process via ``arq app.domains.ingestion.poller.WorkerSettings``.
+Every poll cycle:
+  1. Loads the last cursor from Redis.
+  2. Calls the Geotab adapter to fetch new DutyStatusLog records.
+  3. Normalises and hashes the records.
+  4. Persists to PostgreSQL and updates Redis state.
+  5. Saves the new cursor for the next cycle.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict
+
+from arq import cron
+from arq.connections import RedisSettings
+
+from app.core.config import settings
+from app.core.database import async_session_factory, init_db
+from app.core.redis import init_redis
+from app.domains.engine.sweeper import sweep_active_drivers
+from app.domains.ingestion.adapters.geotab import GeotabAdapter
+from app.domains.ingestion.normalizer import normalize_batch
+from app.domains.ingestion.repository import IngestionRepository
+
+logger = logging.getLogger("dcw.ingestion.poller")
+
+# Module-level adapter instance (initialised on worker startup)
+_geotab_adapter: GeotabAdapter | None = None
+
+DEFAULT_CURSOR = "0000000000000000"
+
+
+async def startup(ctx: Dict[str, Any]) -> None:
+    """ARQ worker startup hook — initialise DB, Redis, and Geotab adapter."""
+    global _geotab_adapter
+
+    logger.info("Starting DCW ingestion worker…")
+    await init_db()
+    await init_redis()
+
+    _geotab_adapter = GeotabAdapter()
+    await _geotab_adapter.connect()
+
+    ctx["geotab_adapter"] = _geotab_adapter
+    logger.info("DCW ingestion worker ready")
+
+
+async def shutdown(ctx: Dict[str, Any]) -> None:
+    """ARQ worker shutdown hook — clean up resources."""
+    logger.info("Shutting down DCW ingestion worker")
+
+
+async def poll_geotab_feed(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """ARQ cron task — poll Geotab for new HOS DutyStatusLog records.
+
+    Orchestrates: fetch → normalise → hash → persist → update Redis.
+    """
+    adapter: GeotabAdapter = ctx["geotab_adapter"]
+    tenant_id = settings.GEOTAB_DATABASE
+
+    # 1. Load cursor
+    cursor = await IngestionRepository.load_cursor("geotab", tenant_id)
+    if cursor is None:
+        cursor = DEFAULT_CURSOR
+
+    # 2. Fetch from Geotab
+    raw_logs, next_cursor = await adapter.fetch_feed(
+        tenant_id=tenant_id,
+        from_cursor=cursor,
+    )
+
+    if not raw_logs:
+        logger.info("No new Geotab records (cursor=%s)", cursor)
+        # Still save cursor in case toVersion advanced
+        await IngestionRepository.save_cursor("geotab", tenant_id, next_cursor)
+        return {"records_fetched": 0, "cursor": next_cursor}
+
+    # 3. Normalise
+    normalised_logs = normalize_batch(raw_logs)
+
+    # 4. Persist to PostgreSQL
+    async with async_session_factory() as session:
+        repo = IngestionRepository(session)
+        inserted = await repo.persist_canonical_logs(normalised_logs)
+        await session.commit()
+
+    # 5. Update Redis active driver set
+    driver_ids = {log.driver_id for log in normalised_logs}
+    await IngestionRepository.update_active_drivers(driver_ids)
+
+    # 6. Save cursor
+    await IngestionRepository.save_cursor("geotab", tenant_id, next_cursor)
+
+    logger.info(
+        "Poll cycle complete: %d fetched, %d inserted, %d drivers active, cursor=%s",
+        len(raw_logs),
+        inserted,
+        len(driver_ids),
+        next_cursor,
+    )
+
+    return {
+        "records_fetched": len(raw_logs),
+        "records_inserted": inserted,
+        "drivers": list(driver_ids),
+        "cursor": next_cursor,
+    }
+
+
+# ── ARQ Worker Settings ─────────────────────────────────────────────────
+
+
+class WorkerSettings:
+    """Configuration class consumed by ``arq`` CLI runner.
+
+    Usage: ``arq app.domains.ingestion.poller.WorkerSettings``
+    """
+
+    functions = [poll_geotab_feed, sweep_active_drivers]
+    cron_jobs = [
+        cron(
+            poll_geotab_feed,
+            second={0},  # Every 2 minutes (controlled by POLL_INTERVAL_SECONDS)
+            run_at_startup=True,
+        ),
+        cron(
+            sweep_active_drivers,
+            second={30},  # Runs 30s after each poll cycle
+            run_at_startup=False,
+        ),
+    ]
+    on_startup = startup
+    on_shutdown = shutdown
+    redis_settings = RedisSettings(
+        host=settings.REDIS_HOST,
+        port=settings.REDIS_PORT,
+        database=settings.REDIS_DB,
+    )
+    max_jobs = 5
+    job_timeout = 300  # 5-minute timeout per poll cycle

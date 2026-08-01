@@ -1,0 +1,26 @@
+# Environment & Secrets
+.env
+.env.*
+*.env
+geotab-api-test/README.md
+
+# Sensitive Data Files / JSON Exports
+*.json
+!package.json
+!tsconfig.json
+
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+.venv/
+env/
+ENV/
+
+# IDE & OS Metadata
+.DS_Store
+.vscode/
+.idea/
+*.swp
