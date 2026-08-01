@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Route · {{ route.meta.driver_id }} · {{ route.meta.date }} — Sentinel HOS{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="/static/alert_detail.js" defer></script>
+<script src="/static/route_map.js" defer></script>
+{% endblock %}
+
+{% block content %}
+<section class="page-head alert-page-head">
+  <div>
+    <p class="muted small">
+      <a href="/ui/drivers/{{ route.meta.driver_id }}?date={{ route.meta.date }}">← Day {{ route.meta.date }}</a>
+    </p>
+    <h1>Route map</h1>
+    <p class="lede">
+      {{ route.meta.driver_id }}
+      · {{ route.meta.point_count }} GPS points
+      · {{ route.meta.segment_count }} segments
+    </p>
+  </div>
+</section>
+
+<section class="panel route-page-panel">
+  {% include "partials/route_map_detail.html" %}
+</section>
+
+<div id="alert-drawer" class="alert-drawer" aria-hidden="true">
+  <div class="alert-drawer-backdrop" onclick="window.AlertDetail && window.AlertDetail.close()"></div>
+  <aside class="alert-drawer-panel" role="dialog" aria-label="Alert calculation details">
+    <div class="alert-drawer-toolbar">
+      <button type="button" class="btn-sm" data-drawer-expand
+              onclick="window.AlertDetail && window.AlertDetail.toggleFullscreen()">Expand</button>
+      <button type="button" class="btn-sm drawer-close"
+              onclick="window.AlertDetail && window.AlertDetail.close()">Close</button>
+    </div>
+    <div id="alert-drawer-body">
+      <p class="muted" style="padding:1.5rem">Select an alert marker to see calculation details.</p>
+    </div>
+  </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.body.addEventListener("htmx:afterSwap", (ev) => {
+    if (ev.target && ev.target.id === "alert-drawer-body") {
+      window.AlertDetail && window.AlertDetail.mount(ev.target);
+    }
+  });
+  window.RouteMap && window.RouteMap.mount();
+</script>
+{% endblock %}

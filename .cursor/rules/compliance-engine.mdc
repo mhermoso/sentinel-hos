@@ -11,7 +11,7 @@ alwaysApply: false
 - **100% deterministic** — pure state-machine logic, no probabilistic or LLM scoring
 - Target evaluation latency: <20 ms per driver timeline
 - Every audit record must bind `inputs_hash` + `rule_pack_version`
-- Default rule pack: `fmcsa-us-property@1.2.0` (SemVer: `fmcsa-us-property@MAJOR.MINOR.PATCH`)
+- Default rule pack: `fmcsa-us-property@1.3.0` (SemVer: `fmcsa-us-property@MAJOR.MINOR.PATCH`)
 
 ## Rule Pack Structure
 
@@ -21,7 +21,9 @@ Orchestrate evaluation through `RulePack.evaluate()` in `rule_pack.py`. Calculat
 2. **14-Hour Duty Window** — continuous elapsed shift window
 3. **30-Minute Rest Break** — after 8 cumulative driving hours without 30-min rest
 4. **60/70-Hour Weekly Cycle** — rolling 7- or 8-day duty aggregation
-5. **34-Hour Restart & Split Sleeper** — cycle reset and 14h clock pause
+5. **34-Hour Restart & Split Sleeper** — cycle reset (home-terminal 1–5 AM validation) and 14h clock pause
+
+Personal conveyance (`PC`) counts as off-duty rest; yard move (`YM`) counts as on-duty/driving. Historical replay lives in `replay.py` (used by backtest scripts).
 
 ## Sweeper & Alerting
 
@@ -31,4 +33,4 @@ Orchestrate evaluation through `RulePack.evaluate()` in `rule_pack.py`. Calculat
 
 ## Testing Requirement
 
-Any change to `app/domains/engine/` **must** include unit tests covering edge conditions. Golden fixtures in `tests/fixtures/golden/` (versioned with rule pack) are the primary contract.
+Any change to `app/domains/engine/` **must** include unit tests covering edge conditions. Prefer golden fixtures in `tests/fixtures/golden/` (versioned with rule pack) when adding new rule-pack contracts; until those exist, edge-case unit tests under `tests/unit/` are required.

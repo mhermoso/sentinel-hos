@@ -4,7 +4,7 @@ Deterministic multi-provider compliance and automated Hours of Service (HOS) reg
 
 ## Overview
 
-Sentinel HOS is a compliance platform designed for commercial fleet operators who must meet federal and jurisdictional HOS regulations. The engine evaluates driver duty status, rest periods, and driving limits using deterministic, auditable rules—so the same inputs always produce the same compliance outcome across providers and integrations.
+Sentinel HOS (also branded as **Driver Compliance Watch / DCW**) is a compliance platform designed for commercial fleet operators who must meet federal and jurisdictional HOS regulations. The engine evaluates driver duty status, rest periods, and driving limits using deterministic, auditable rules—so the same inputs always produce the same compliance outcome across providers and integrations.
 
 ## Key Capabilities
 
@@ -19,8 +19,20 @@ Fleet operators face fragmented ELD data, inconsistent interpretations of HOS ru
 
 ## Status
 
-Early-stage project. Architecture, provider adapters, and regulatory rule packs are under active development.
+Active development. The primary implementation lives in [`dcw-backend/`](./dcw-backend/):
+
+| Area | State |
+|------|--------|
+| Architecture / ADRs | ADRs 001–006 accepted |
+| Geotab ingestion | Live (poll + history seed) |
+| Motive / Samsara | Adapter stubs |
+| Rule pack | `fmcsa-us-property@1.3.0` |
+| Notifier | Twilio Voice/SMS with alert locks (dry-run supported) |
+| Dashboard | FastAPI REST + HTMX HOS timeline |
+| Launch readiness | Pre-alpha — see [LAUNCH_CHECKLIST.md](./LAUNCH_CHECKLIST.md) |
+
+Local quickstart: [`dcw-backend/README.md`](./dcw-backend/README.md).
 
 ## License
 
-TBD
+Functional Source License (FSL-1.1-Apache-2.0) — see [`dcw-backend/LICENSE`](./dcw-backend/LICENSE).

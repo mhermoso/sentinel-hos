@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Logs — Sentinel HOS{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <h1>Logs</h1>
+  <p class="lede">Live pipeline activity — ingestion, engine audits, alert dispatches, and system events.</p>
+</section>
+
+<section class="panel logs-panel"
+         id="logs-live"
+         hx-get="/ui/logs/partial?source={{ source }}"
+         hx-trigger="every 5s"
+         hx-swap="innerHTML">
+  {% include "partials/logs_feed.html" %}
+</section>
+{% endblock %}

@@ -1,10 +1,10 @@
 .PHONY: help dev worker test lint format clean db-up db-down \
         stack-up stack-down stack-logs image-build kube-up kube-down ui \
         seed-history seed-history-refresh backtest-dispatches remap-pc-ym \
-        fetch-history
+        fetch-history fetch-gps-history
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
-ARQ ?= arq
+ARQ ?= $(shell if [ -x .venv/bin/arq ]; then echo .venv/bin/arq; else echo arq; fi)
 COMPOSE ?= podman compose
 STACK_COMPOSE = $(COMPOSE) -f docker-compose.stack.yml
 IMAGE_NAME ?= localhost/dcw-backend:latest
@@ -25,6 +25,7 @@ help:
 	@echo "  make db-up        Spin up local PostgreSQL and Redis containers"
 	@echo "  make db-down      Stop local infrastructure containers"
 	@echo "  make fetch-history  Fetch last DAYS (default 30) Geotab HOS → HISTORY_JSON"
+	@echo "  make fetch-gps-history  Fetch last GPS_DAYS (default 7) Geotab LogRecord → Postgres"
 	@echo "  make seed-history Persist $(HISTORY_JSON) into Postgres"
 	@echo "  make seed-history-refresh  DEV: remap PC/YM, truncate tenant HOS, re-seed"
 	@echo "  make remap-pc-ym  Remap PC/YM in $(HISTORY_JSON) (no Geotab)"
@@ -106,6 +107,11 @@ kube-down:
 
 fetch-history:
 	$(PYTHON) scripts/fetch_hos_history.py --days $(DAYS) --output $(HISTORY_JSON)
+
+# GPS breadcrumb backfill (ADR-007). Override: make fetch-gps-history GPS_DAYS=14
+GPS_DAYS ?= 7
+fetch-gps-history:
+	$(PYTHON) scripts/fetch_gps_history.py --days $(GPS_DAYS) --persist
 
 backtest-event:
 	$(PYTHON) scripts/backtest_alerts.py --mode event --input $(HISTORY_JSON)

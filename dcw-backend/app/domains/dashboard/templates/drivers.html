@@ -8,20 +8,69 @@
 </section>
 
 <section class="panel">
+  <form class="drivers-filters" method="get" action="/ui/drivers"
+        data-total-drivers="{{ total_drivers }}"
+        hx-get="/ui/drivers/partial"
+        hx-target="#driver-rows"
+        hx-trigger="change, submit"
+        hx-swap="innerHTML"
+        hx-on::after-request="window.DriversFilters && window.DriversFilters.updateCount()">
+    <label>
+      Search
+      <input type="search" name="q" value="{{ q or '' }}" placeholder="name or ID" />
+    </label>
+    <label>
+      Status
+      <select name="status">
+        <option value="" {% if not status %}selected{% endif %}>All</option>
+        <option value="OFF" {% if status == 'OFF' %}selected{% endif %}>OFF</option>
+        <option value="SB" {% if status == 'SB' %}selected{% endif %}>SB</option>
+        <option value="D" {% if status == 'D' %}selected{% endif %}>D</option>
+        <option value="ON" {% if status == 'ON' %}selected{% endif %}>ON</option>
+        <option value="PC" {% if status == 'PC' %}selected{% endif %}>PC</option>
+        <option value="YM" {% if status == 'YM' %}selected{% endif %}>YM</option>
+        <option value="UNKNOWN" {% if status == 'UNKNOWN' %}selected{% endif %}>UNKNOWN</option>
+      </select>
+    </label>
+    <label>
+      Mode
+      <select name="mode">
+        <option value="" {% if not mode %}selected{% endif %}>All</option>
+        <option value="live" {% if mode == 'live' %}selected{% endif %}>Live</option>
+        <option value="historical" {% if mode == 'historical' %}selected{% endif %}>Historical</option>
+      </select>
+    </label>
+    <button type="submit" class="btn-sm">Apply</button>
+  </form>
+
   <div class="panel-meta">
-    <span>{{ drivers|length }} drivers</span>
+    <span id="drivers-count">{% if filtered %}{{ drivers|length }} of {{ total_drivers }}{% else %}{{ drivers|length }}{% endif %} drivers</span>
     <span>Display TZ: {{ timezone }}{% if tz_abbrev %} ({{ tz_abbrev }}){% endif %}</span>
     <span class="hint">List refreshes every 45s</span>
   </div>
 
-  <table class="driver-table">
+  <table class="driver-table"
+         data-sortable
+         data-sort-storage="dcw.drivers.sort"
+         data-default-sort="last"
+         data-default-dir="desc">
     <thead>
       <tr>
-        <th>Driver</th>
-        <th>Status</th>
-        <th>Mode</th>
-        <th>Events</th>
-        <th>Last event</th>
+        <th data-sort-key="driver" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Driver">Driver</button>
+        </th>
+        <th data-sort-key="status" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Status">Status</button>
+        </th>
+        <th data-sort-key="mode" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Mode">Mode</button>
+        </th>
+        <th data-sort-key="events" data-sort-as="number" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Events">Events</button>
+        </th>
+        <th data-sort-key="last" data-sort-as="time" aria-sort="descending">
+          <button type="button" class="sort-btn" data-label="Last event">Last event</button>
+        </th>
         <th></th>
       </tr>
     </thead>
@@ -29,9 +78,44 @@
       id="driver-rows"
       hx-get="/ui/drivers/partial"
       hx-trigger="every 45s"
+      hx-include=".drivers-filters"
       hx-swap="innerHTML">
       {% include "partials/driver_rows.html" %}
     </tbody>
   </table>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.DriversFilters = {
+    isFiltered() {
+      const form = document.querySelector(".drivers-filters");
+      if (!form) return false;
+      const q = (form.querySelector('[name="q"]')?.value || "").trim();
+      const status = (form.querySelector('[name="status"]')?.value || "").trim();
+      const mode = (form.querySelector('[name="mode"]')?.value || "").trim();
+      return !!(q || status || mode);
+    },
+    rowCount() {
+      const tbody = document.getElementById("driver-rows");
+      if (!tbody || tbody.querySelector(".empty")) return 0;
+      return tbody.querySelectorAll("tr").length;
+    },
+    updateCount() {
+      const el = document.getElementById("drivers-count");
+      const form = document.querySelector(".drivers-filters");
+      if (!el || !form) return;
+      const n = this.rowCount();
+      const total = form.dataset.totalDrivers;
+      el.textContent = this.isFiltered() ? `${n} of ${total} drivers` : `${n} drivers`;
+    },
+  };
+  document.body.addEventListener("htmx:afterSwap", (ev) => {
+    if (ev.target && ev.target.id === "driver-rows") {
+      window.DriversFilters.updateCount();
+      window.SortableTables && window.SortableTables.reapply(document.querySelector("table.driver-table"));
+    }
+  });
+</script>
 {% endblock %}

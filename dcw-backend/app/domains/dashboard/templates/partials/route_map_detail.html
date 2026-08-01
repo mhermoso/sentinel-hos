@@ -1,0 +1,49 @@
+<div class="route-map-detail" id="route-map-root" data-route-detail {% if full_page %}data-full-page{% endif %}>
+  {% if not full_page %}
+  <div class="route-map-detail-head">
+    <div>
+      <p class="muted small">Route map</p>
+      <h2>{{ route.meta.driver_id }} · {{ route.meta.date }}</h2>
+      <p class="muted small">
+        {{ route.meta.point_count }} GPS points
+        · {{ route.meta.segment_count }} segments
+      </p>
+    </div>
+    <a class="btn-sm"
+       href="/ui/drivers/{{ route.meta.driver_id }}/route?date={{ route.meta.date }}">
+      Full page
+    </a>
+  </div>
+  {% endif %}
+
+  <p class="route-coverage-note muted" data-route-note {% if not route.meta.coverage_note %}hidden{% endif %}>
+    {{ route.meta.coverage_note }}
+  </p>
+
+  {% if route.meta.point_count == 0 %}
+  <div class="route-empty">
+    <p>GPS trail unavailable for this day.</p>
+    <p class="muted small">
+      Status-only coordinates are not used as a dense route.
+      Run GPS history backfill or wait for the LogRecord poller.
+    </p>
+  </div>
+  {% else %}
+  <div class="route-map-host" data-route-map data-driver-id="{{ route.meta.driver_id }}">
+    <script type="application/json">{{ route_json | tojson }}</script>
+  </div>
+  <ul class="route-legend" aria-label="Route map legend">
+    <li><span class="route-swatch" style="background:#8b9aab"></span> OFF</li>
+    <li><span class="route-swatch" style="background:#6b8cae"></span> SB</li>
+    <li><span class="route-swatch" style="background:#3d9cf0"></span> D</li>
+    <li><span class="route-swatch" style="background:#e6b84d"></span> ON</li>
+    <li><span class="route-swatch" style="background:#6b7280"></span> UNK</li>
+    <li><span class="hos-legend-swatch hos-legend-triangle" aria-hidden="true"></span> Warning</li>
+    <li><span class="hos-legend-swatch hos-legend-diamond" aria-hidden="true"></span> Violation</li>
+    <li><span class="hos-legend-swatch hos-legend-circle" aria-hidden="true"></span> Critical</li>
+  </ul>
+  {% endif %}
+</div>
+<script>
+  window.RouteMap && window.RouteMap.mount(document.getElementById("route-map-root"));
+</script>

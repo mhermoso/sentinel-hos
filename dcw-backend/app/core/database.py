@@ -57,12 +57,39 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await conn.run_sync(_ensure_append_only_trigger)
+        await conn.run_sync(_ensure_append_only_triggers)
 
 
-def _ensure_append_only_trigger(connection) -> None:
-    """Attach append-only trigger to canonical_hos_logs if not already present."""
+def _ensure_append_only_triggers(connection) -> None:
+    """Attach append-only triggers to immutable tables if not already present."""
     from sqlalchemy import text
+
+    # Ensure block functions exist (covers DBs bootstrapped before ADR-007).
+    # asyncpg rejects multi-statement prepared SQL — run each CREATE separately.
+    connection.execute(
+        text(
+            """
+            CREATE OR REPLACE FUNCTION dcw_block_canonical_mutation()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                RAISE EXCEPTION 'canonical_hos_logs is append-only: % is not permitted', TG_OP;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+    )
+    connection.execute(
+        text(
+            """
+            CREATE OR REPLACE FUNCTION dcw_block_gps_breadcrumb_mutation()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                RAISE EXCEPTION 'gps_breadcrumbs is append-only: % is not permitted', TG_OP;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+    )
 
     connection.execute(
         text(
@@ -76,6 +103,15 @@ def _ensure_append_only_trigger(connection) -> None:
                     CREATE TRIGGER trg_canonical_hos_logs_no_mutation
                     BEFORE UPDATE OR DELETE ON canonical_hos_logs
                     FOR EACH ROW EXECUTE FUNCTION dcw_block_canonical_mutation();
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger
+                    WHERE tgname = 'trg_gps_breadcrumbs_no_mutation'
+                ) THEN
+                    CREATE TRIGGER trg_gps_breadcrumbs_no_mutation
+                    BEFORE UPDATE OR DELETE ON gps_breadcrumbs
+                    FOR EACH ROW EXECUTE FUNCTION dcw_block_gps_breadcrumb_mutation();
                 END IF;
             END $$;
             """

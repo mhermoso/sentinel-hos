@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ detail.meta.severity }} {{ detail.meta.violation_type }} — Sentinel HOS{% endblock %}
+
+{% block head %}
+<script src="/static/alert_detail.js" defer></script>
+{% endblock %}
+
+{% block content %}
+<section class="page-head alert-page-head">
+  <div>
+    <p class="muted small">
+      <a href="/ui/alerts">← Alerts</a>
+      ·
+      <a href="/ui/drivers/{{ detail.meta.driver_id }}?date={{ detail.day_date }}">Day {{ detail.day_date }}</a>
+    </p>
+    <h1>{{ detail.meta.violation_type }}</h1>
+    <p class="lede">
+      <span class="sev sev-{{ detail.meta.severity }}">{{ detail.meta.severity }}</span>
+      {{ detail.meta.driver_name or detail.meta.driver_id }}
+      · {{ detail.meta.local_time }}
+    </p>
+  </div>
+</section>
+
+<section class="panel alert-page-panel">
+  {% include "partials/alert_detail.html" %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Fallback if defer/cache left AlertDetail defined after first paint.
+  window.AlertDetail && window.AlertDetail.mount();
+</script>
+{% endblock %}

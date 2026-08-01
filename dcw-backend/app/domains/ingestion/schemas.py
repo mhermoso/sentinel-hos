@@ -78,6 +78,55 @@ class DCWCanonicalHOSLog(BaseModel):
         return value
 
 
+class DCWGpsBreadcrumb(BaseModel):
+    """Canonical GPS breadcrumb for route maps (ADR-007).
+
+    Separate from ``DCWCanonicalHOSLog`` — not an HOS duty-status event.
+    The compliance engine must never consume this type.
+    """
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    tenant_id: str = Field(..., description="Unique customer database identifier")
+    device_id: str = Field(..., description="Vehicle / telematics device ID")
+    driver_id: str = Field(
+        ...,
+        description="Resolved driver ID (or unassigned:device:{id} fallback)",
+    )
+    raw_id: str = Field(..., description="Provider-specific record ID")
+    event_timestamp: datetime = Field(..., description="UTC timestamp of GPS fix")
+    latitude: float = Field(..., ge=-90.0, le=90.0)
+    longitude: float = Field(..., ge=-180.0, le=180.0)
+    speed_kmh: Optional[float] = Field(
+        None,
+        ge=0.0,
+        description="Vehicle speed in km/h when reported by provider",
+    )
+    raw_payload: Dict[str, Any] = Field(
+        ..., description="Sanitised snapshot of original provider JSON payload"
+    )
+    inputs_hash: Optional[str] = Field(
+        None, description="SHA-256 digest of integrity-relevant fields"
+    )
+
+    @field_validator("event_timestamp", mode="before")
+    @classmethod
+    def parse_datetime(cls, value: Any) -> datetime:
+        """Standardize ISO string or provider datetime to UTC-aware datetime."""
+        if isinstance(value, str):
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt
+        elif isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
+        return value
+
+
 class IngestionBatchResult(BaseModel):
     """Result summary returned by an ingestion polling cycle."""
 

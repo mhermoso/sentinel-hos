@@ -46,6 +46,17 @@ class DriverListResponse(BaseModel):
     drivers: List[DriverListItemResponse]
 
 
+class DaySegmentAlertResponse(BaseModel):
+    """Alert that fires during a day activity-log segment."""
+
+    as_of: datetime
+    violation_type: str
+    severity: str
+    rule_ref: str = ""
+    description: str = ""
+    source: str = ""
+
+
 class DayStatusEventResponse(BaseModel):
     """A status change clipped to a home-terminal day (grid-eligible statuses only).
 
@@ -60,10 +71,19 @@ class DayStatusEventResponse(BaseModel):
     hour_of_day: float
     duration_seconds: float
     duration_hhmm: str
+    duration_hms: str = ""
     distance_m: float = 0.0
     distance_mi: float = 0.0
     distance_km: float = 0.0
     distance_label: str = ""
+    origin: str = ""
+    annotation: Optional[str] = None
+    device_id: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    location_label: str = ""
+    continued: bool = False
+    alerts: List[DaySegmentAlertResponse] = Field(default_factory=list)
 
 
 class DurationTotalsResponse(BaseModel):
@@ -133,6 +153,51 @@ class DriverDayResponse(BaseModel):
     events: List[DayStatusEventResponse]
     totals: DurationTotalsResponse
     alert_markers: List[AlertMarkerResponse] = Field(default_factory=list)
+
+
+class RouteSegmentResponse(BaseModel):
+    """Status-colored polyline segment between two GPS breadcrumbs."""
+
+    status: str
+    color: str
+    lat1: float
+    lon1: float
+    lat2: float
+    lon2: float
+    t0: datetime
+    t1: datetime
+
+
+class RouteAlertPointResponse(BaseModel):
+    """Alert marker placed on the day route map."""
+
+    as_of: datetime
+    severity: str
+    violation_type: str
+    rule_ref: str = ""
+    description: str = ""
+    source: str = ""
+    lat: float
+    lon: float
+
+
+class DriverDayRouteMeta(BaseModel):
+    """Metadata for a driver-day route response."""
+
+    driver_id: str
+    date: date
+    point_count: int = 0
+    segment_count: int = 0
+    downsampled_count: int = 0
+    coverage_note: str = ""
+
+
+class DriverDayRouteResponse(BaseModel):
+    """GPS route trail + alert points for one driver / local calendar day."""
+
+    segments: List[RouteSegmentResponse] = Field(default_factory=list)
+    alerts: List[RouteAlertPointResponse] = Field(default_factory=list)
+    meta: DriverDayRouteMeta
 
 
 class AlertMarkersResponse(BaseModel):
@@ -344,6 +409,10 @@ class DriverPositionResponse(BaseModel):
     longitude: float
     event_timestamp: datetime
     is_live: bool = False
+    warning_count: int = 0
+    violation_count: int = 0
+    latest_alert_severity: Optional[str] = None
+    latest_alert_type: Optional[str] = None
 
 
 class DriverPositionsResponse(BaseModel):
@@ -352,6 +421,28 @@ class DriverPositionsResponse(BaseModel):
     tenant_id: str
     total: int
     positions: List[DriverPositionResponse]
+
+
+class RecentIngestionItemResponse(BaseModel):
+    """One recently ingested canonical HOS log (Geotab arrival feed)."""
+
+    ingested_at: datetime
+    event_timestamp: datetime
+    driver_id: str
+    driver_name: Optional[str] = None
+    status: str
+    device_id: Optional[str] = None
+    raw_id: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+class RecentIngestionResponse(BaseModel):
+    """Newest canonical HOS logs by ingested_at for the live Geotab feed."""
+
+    tenant_id: str
+    total: int
+    events: List[RecentIngestionItemResponse]
 
 
 class DispatchLogItemResponse(BaseModel):
@@ -376,3 +467,21 @@ class DispatchLogResponse(BaseModel):
     total: int
     path: str
     events: List[DispatchLogItemResponse]
+
+
+class OpsLogItemResponse(BaseModel):
+    """One row from the dcw.* ops JSONL event log."""
+
+    timestamp: Optional[str] = None
+    level: str = "INFO"
+    logger: str = ""
+    message: str = ""
+    process: str = ""
+
+
+class OpsLogResponse(BaseModel):
+    """Latest operational log events from logs/ops-events.log."""
+
+    total: int
+    path: str
+    events: List[OpsLogItemResponse]

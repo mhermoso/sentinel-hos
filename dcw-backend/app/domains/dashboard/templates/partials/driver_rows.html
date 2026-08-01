@@ -1,5 +1,10 @@
 {% for d in drivers %}
-<tr>
+<tr data-sortable-row
+    data-sort-driver="{{ (d.driver_name or d.driver_id)|lower }}|{{ d.driver_id|lower }}"
+    data-sort-status="{{ (d.current_status or '')|lower }}"
+    data-sort-mode="{% if d.is_live %}live{% else %}historical{% endif %}"
+    data-sort-events="{{ d.event_count }}"
+    data-sort-last="{{ d.last_event_at.isoformat() if d.last_event_at else '' }}">
   <td>
     <a class="driver-link" href="/ui/drivers/{{ d.driver_id }}?date={{ today }}">
       {{ d.driver_name or d.driver_id }}
@@ -17,7 +22,7 @@
     {% endif %}
   </td>
   <td>{{ d.event_count }}</td>
-  <td class="muted">{{ d.last_event_at.isoformat() if d.last_event_at else "—" }}</td>
+  <td class="muted mono">{{ d.last_event_at | local_dt(timezone) }}</td>
   <td><a class="btn-sm" href="/ui/drivers/{{ d.driver_id }}?date={{ today }}">Open day</a></td>
 </tr>
 {% else %}
