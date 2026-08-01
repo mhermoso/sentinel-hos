@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.core.redis import COMPLIANCE_ALERTS_CHANNEL, publish_event
 from app.core.security import compute_inputs_hash
+from app.domains.engine.replay import WEEKLY_DUTY_LOOKBACK_BUFFER_DAYS, compute_weekly_duty_seconds
 from app.domains.engine.repository import EngineRepository
 from app.domains.engine.rule_pack import RulePack
 from app.domains.ingestion.repository import IngestionRepository
@@ -41,17 +43,18 @@ async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
 
     swept = 0
     violations_published = 0
+    lookback_days = settings.WEEKLY_CYCLE_DAYS + WEEKLY_DUTY_LOOKBACK_BUFFER_DAYS
 
     async with async_session_factory() as session:
         repo = EngineRepository(session)
 
         for driver_id in driver_ids:
             try:
-                # 1. Fetch timeline
+                # 1. Fetch timeline (extended lookback for 34h restart detection)
                 timeline = await repo.get_driver_timeline(
                     tenant_id=tenant_id,
                     driver_id=driver_id,
-                    lookback_days=settings.WEEKLY_CYCLE_DAYS,
+                    lookback_days=lookback_days,
                 )
 
                 if not timeline.events:
@@ -59,9 +62,10 @@ async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
                     continue
 
                 # 2. Compute weekly duty seconds for 60/70h rule
-                weekly_seconds = await repo.get_weekly_duty_seconds(
-                    tenant_id=tenant_id,
-                    driver_id=driver_id,
+                now = datetime.now(timezone.utc)
+                weekly_seconds = compute_weekly_duty_seconds(
+                    timeline.events,
+                    as_of=now,
                     cycle_days=settings.WEEKLY_CYCLE_DAYS,
                 )
 

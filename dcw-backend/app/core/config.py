@@ -80,7 +80,11 @@ class Settings(BaseSettings):
     MOTIVE_API_KEY: str = ""
 
     # ── Compliance Engine ────────────────────────────────────────────────
-    DEFAULT_RULE_PACK_VERSION: str = "fmcsa-us-property@1.2.0"
+    DEFAULT_RULE_PACK_VERSION: str = "fmcsa-us-property@1.3.0"
+    DEFAULT_HOME_TERMINAL_TIMEZONE: str = Field(
+        default="America/Chicago",
+        description="Home terminal IANA timezone for 34h restart 1–5 AM validation (ADR-005)",
+    )
     WEEKLY_CYCLE_DAYS: int = Field(
         default=8,
         description="Rolling window for 60/70-hour rule: 7-day (60h) or 8-day (70h)",

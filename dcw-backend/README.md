@@ -110,6 +110,8 @@ make backtest-sweeper
 make backtest-event-export
 # or: python scripts/backtest_alerts.py --mode event --csv --html
 
+Rule pack `fmcsa-us-property@1.3.0` credits valid 34-hour OFF/SB restarts in weekly duty totals (two 1–5 AM periods in `DEFAULT_HOME_TERMINAL_TIMEZONE`, default US Central).
+
 # Optional: load history into Postgres for live sweeper testing
 python scripts/fetch_hos_history.py --days 10 --persist
 ```
