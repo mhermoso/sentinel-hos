@@ -98,7 +98,11 @@ def count_1_to_5_am_periods(
     end: datetime,
     home_terminal_tz: ZoneInfo,
 ) -> int:
-    """Count calendar days where rest overlaps [01:00, 05:00) in home-terminal local time."""
+    """Count calendar days where rest fully includes [01:00, 05:00) home-terminal local time.
+
+    § 395.3(c) / product scope require the restart to *include* two 1:00–5:00 AM
+    periods — a partial overlap (e.g. one minute before 05:00) does not qualify.
+    """
     start = _normalize_utc(start)
     end = _normalize_utc(end)
     if start >= end:
@@ -113,9 +117,7 @@ def count_1_to_5_am_periods(
     while day <= last_day:
         period_start = datetime.combine(day, time(1, 0), tzinfo=home_terminal_tz)
         period_end = datetime.combine(day, time(5, 0), tzinfo=home_terminal_tz)
-        overlap_start = max(start, period_start)
-        overlap_end = min(end, period_end)
-        if overlap_start < overlap_end:
+        if start <= period_start and end >= period_end:
             count += 1
         day += timedelta(days=1)
 
@@ -128,7 +130,7 @@ def is_valid_restart_period(
     *,
     home_terminal_tz: ZoneInfo,
 ) -> bool:
-    """Return True when rest is at least 34h and spans two 1–5 AM home-terminal periods."""
+    """Return True when rest is ≥34h and fully includes two 1–5 AM home-terminal periods."""
     rest_start = _normalize_utc(rest_start)
     rest_end = _normalize_utc(rest_end)
     duration = (rest_end - rest_start).total_seconds()
