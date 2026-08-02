@@ -15,6 +15,7 @@ from app.domains.engine.replay import (
     compute_weekly_duty_seconds,
     count_1_to_5_am_periods,
     find_restart_reset_point,
+    is_valid_restart_period,
     logs_to_timeline_events,
 )
 from app.domains.engine.rule_pack import RulePack
@@ -33,11 +34,12 @@ def _ts(year: int, month: int, day: int, hour: int, minute: int = 0) -> datetime
 
 
 def _heavy_duty_then_restart_timeline() -> list[DriverTimeline.HOSEvent]:
-    """70h duty, then 35h OFF spanning two Chicago 1–5 AM days, then ON."""
+    """70h duty, then 35h OFF fully including two Chicago 1–5 AM days, then ON."""
     events = [
         DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(2026, 7, 10, 0)),
     ]
-    duty_start = _ts(2026, 7, 10, 10)
+    # Start early enough that OFF begins before 01:00 CDT on the first restart morning.
+    duty_start = _ts(2026, 7, 10, 6)
     events.append(DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=duty_start))
     # 70 hours of driving segments (simplified as one long block ending before restart)
     events.append(
@@ -46,8 +48,8 @@ def _heavy_duty_then_restart_timeline() -> list[DriverTimeline.HOSEvent]:
             timestamp=duty_start + timedelta(hours=70),
         )
     )
-    restart_start = duty_start + timedelta(hours=70)
-    # 35h OFF — covers 7/13 and 7/14 early mornings in US Central
+    restart_start = duty_start + timedelta(hours=70)  # Jul 13 04:00 UTC = Jul 12 23:00 CDT
+    # 35h OFF — fully includes Jul 13 and Jul 14 01:00–05:00 CDT
     events.append(
         DriverTimeline.HOSEvent(
             status=CanonicalDutyStatus.ON_DUTY.value,
@@ -58,9 +60,40 @@ def _heavy_duty_then_restart_timeline() -> list[DriverTimeline.HOSEvent]:
 
 
 def test_count_1_to_5_am_periods_two_days() -> None:
-    start = _ts(2026, 7, 25, 6, 0)  # 00:00 CDT
+    start = _ts(2026, 7, 25, 6, 0)  # 01:00 CDT
     end = _ts(2026, 7, 27, 6, 0)
     assert count_1_to_5_am_periods(start, end, CHICAGO) >= 2
+
+
+def test_partial_1_to_5_am_overlap_does_not_count() -> None:
+    """One minute of the first 1–5 AM window must not count as a full period."""
+    # 04:59–14:59 CDT is exactly 34h, but day-1 includes only 04:59–05:00.
+    off_start = _ts(2026, 7, 20, 9, 59)  # 04:59 CDT
+    on_duty = off_start + timedelta(hours=34)  # 14:59 CDT next day
+    assert count_1_to_5_am_periods(off_start, on_duty, CHICAGO) == 1
+    assert not is_valid_restart_period(off_start, on_duty, home_terminal_tz=CHICAGO)
+
+    duty_start = on_duty - timedelta(hours=34) - timedelta(hours=70)
+    events = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=duty_start - timedelta(hours=1)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=duty_start),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=off_start),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.ON_DUTY.value, timestamp=on_duty),
+    ]
+    assert find_restart_reset_point(events, on_duty, home_terminal_tz=CHICAGO) is None
+    weekly = compute_weekly_duty_seconds(
+        events, as_of=on_duty, cycle_days=8, home_terminal_tz=CHICAGO
+    )
+    assert weekly == pytest.approx(70 * 3600.0)
+
+
+def test_full_1_to_5_am_periods_qualify_restart() -> None:
+    """Rest that fully covers two 1–5 AM windows must credit the restart."""
+    # 00:00 CDT day1 → 10:00 CDT day2 = 34h, covers Jul 20 and Jul 21 1–5 AM fully.
+    off_start = _ts(2026, 7, 20, 5, 0)  # 00:00 CDT
+    on_duty = off_start + timedelta(hours=34)
+    assert count_1_to_5_am_periods(off_start, on_duty, CHICAGO) == 2
+    assert is_valid_restart_period(off_start, on_duty, home_terminal_tz=CHICAGO)
 
 
 def test_34h_restart_resets_weekly_duty() -> None:
