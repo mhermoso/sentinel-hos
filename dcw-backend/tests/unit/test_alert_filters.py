@@ -49,6 +49,32 @@ def test_collect_fleet_alerts_empty_source_means_both() -> None:
     assert len(merged_none) == 2
 
 
+def test_collect_fleet_alerts_keeps_same_rule_for_different_drivers() -> None:
+    """Fleet merge must not drop another driver's identical rule/severity/minute."""
+    as_of = "2026-07-15T12:00:30+00:00"
+    live = [
+        {
+            "as_of": as_of,
+            "driver_id": "driver-a",
+            "violation_type": "WEEKLY_CYCLE",
+            "severity": "WARNING",
+            "source": "live_audit",
+            "description": "A approaching weekly limit",
+        },
+        {
+            "as_of": as_of,
+            "driver_id": "driver-b",
+            "violation_type": "WEEKLY_CYCLE",
+            "severity": "WARNING",
+            "source": "live_audit",
+            "description": "B approaching weekly limit",
+        },
+    ]
+    merged = collect_fleet_alerts([], live)
+    assert len(merged) == 2
+    assert {m["driver_id"] for m in merged} == {"driver-a", "driver-b"}
+
+
 def test_quick_ranges_and_default_30d() -> None:
     tz = "America/Chicago"
     start, end = default_alerts_local_range(tz)

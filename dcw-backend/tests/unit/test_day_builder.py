@@ -222,6 +222,7 @@ def test_merge_alert_markers_dedupes() -> None:
     as_of = datetime(2025, 7, 28, 15, 0, tzinfo=timezone.utc)
     a = {
         "as_of": as_of,
+        "driver_id": "d1",
         "violation_type": "DRIVING_LIMIT",
         "severity": "WARNING",
         "source": "backtest",
@@ -229,6 +230,27 @@ def test_merge_alert_markers_dedupes() -> None:
     b = dict(a)
     merged = merge_alert_markers([a], [b])
     assert len(merged) == 1
+
+
+def test_merge_alert_markers_keeps_per_driver_collisions() -> None:
+    as_of = datetime(2025, 7, 28, 15, 0, 45, tzinfo=timezone.utc)
+    a = {
+        "as_of": as_of,
+        "driver_id": "d1",
+        "violation_type": "WEEKLY_CYCLE",
+        "severity": "WARNING",
+        "source": "live_audit",
+    }
+    b = {
+        "as_of": as_of,
+        "driver_id": "d2",
+        "violation_type": "WEEKLY_CYCLE",
+        "severity": "WARNING",
+        "source": "live_audit",
+    }
+    merged = merge_alert_markers([a, b])
+    assert len(merged) == 2
+    assert {m["driver_id"] for m in merged} == {"d1", "d2"}
 
     filtered = filter_backtest_markers(
         [
