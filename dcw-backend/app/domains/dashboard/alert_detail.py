@@ -21,7 +21,7 @@ from app.domains.engine.replay import (
     truncate_timeline_to,
 )
 from app.domains.engine.rule_pack import RulePack
-from app.domains.engine.schemas import DriverTimeline, Violation, ViolationType
+from app.domains.engine.schemas import DriverProfile, DriverTimeline, Violation, ViolationType
 from app.domains.engine.state_machine import run_state_machine
 from app.domains.ingestion.duty_filter import should_skip_duty_status_change
 from app.domains.ingestion.schemas import CanonicalDutyStatus
@@ -61,7 +61,6 @@ def _match_violation(
 _DRIVING_STATUSES = frozenset(
     {
         CanonicalDutyStatus.DRIVING.value,
-        CanonicalDutyStatus.YARD_MOVE.value,
     }
 )
 _DUTY_STATUSES = frozenset(
@@ -133,8 +132,7 @@ def _build_weekly_restart_section(
             "weekly_window_start_local": restart_local,
             "message": (
                 f"Valid 34h restart at {restart_local}. "
-                "Weekly duty is counted from that reset (34h OFF/SB plus two "
-                "home-terminal 1–5 AM periods)."
+                "Weekly duty is counted from that reset (≥34h consecutive OFF/SB)."
             ),
         }
     return {
@@ -303,7 +301,7 @@ def _build_explanation(
                 {
                     "step": "Driving accumulated",
                     "value": f"{_hours(used)}h",
-                    "note": "Sum of D/YM within the current shift",
+                    "note": "Sum of Driving within the current shift",
                 },
                 {
                     "step": "11-hour driving limit",
@@ -332,17 +330,18 @@ def _build_explanation(
     elif violation_type == ViolationType.DUTY_WINDOW.value:
         used = state.duty_window_elapsed_seconds
         remaining = MAX_DUTY_WINDOW_SECONDS - used
+        clock_start = getattr(state, "duty_window_start", None) or shift_start
         steps.extend(
             [
                 {
                     "step": "Shift start (14h clock)",
-                    "value": _local_label(shift_start, tz) if shift_start else "n/a",
-                    "note": "14h window starts when duty begins after qualifying rest",
+                    "value": _local_label(clock_start, tz) if clock_start else "n/a",
+                    "note": "14h wall-clock starts at first ON/D/YM after qualifying rest",
                 },
                 {
                     "step": "Duty window elapsed",
                     "value": f"{_hours(used)}h",
-                    "note": "ON/D/YM time since shift start",
+                    "note": "Wall-clock since first ON/D/YM (split-sleeper periods excluded)",
                 },
                 {
                     "step": "14-hour limit",
@@ -367,7 +366,7 @@ def _build_explanation(
                 {
                     "step": "Driving since last 30-min break",
                     "value": f"{_hours(since)}h",
-                    "note": "Break must be ≥30 consecutive minutes OFF/SB",
+                    "note": "Break must be ≥30 consecutive minutes non-driving (OFF/SB/ON/PC)",
                 },
                 {
                     "step": "8-hour threshold",
@@ -412,7 +411,7 @@ def _build_explanation(
                         if overage_seconds > 0
                         else f"{_hours(max(0.0, weekly_limit_hours * 3600 - weekly_duty_seconds))}h remaining"
                     ),
-                    "note": "34h OFF/SB with two 1–5 AM periods resets this clock",
+                    "note": "≥34h consecutive OFF/SB resets this clock",
                 },
             ]
         )
@@ -420,19 +419,14 @@ def _build_explanation(
         steps.extend(
             [
                 {
-                    "step": "Consecutive rest",
-                    "value": f"{_hours(state.consecutive_rest_seconds)}h",
-                    "note": "OFF/SB must reach 34h for restart credit",
+                    "step": "Legacy finding",
+                    "value": "RESTART_INVALID",
+                    "note": "No longer emitted as of fmcsa-us-property@2.5.0",
                 },
                 {
-                    "step": "Required rest",
-                    "value": "34.0h",
-                    "note": "§ 395.3(c) plus two home-terminal 1–5 AM periods",
-                },
-                {
-                    "step": "Why invalid",
-                    "value": "missing duration and/or 1–5 AM periods",
-                    "note": "Rest ended without meeting both requirements",
+                    "step": "Current rule",
+                    "value": "≥34.0h consecutive OFF/SB",
+                    "note": "§ 395.3(c) cycle reset — no 1–5 AM gate",
                 },
             ]
         )
@@ -460,6 +454,7 @@ def build_alert_detail(
     description_hint: str = "",
     severity_hint: str = "",
     rule_ref_hint: str = "",
+    profile: DriverProfile | None = None,
 ) -> Dict[str, Any]:
     """Recompute compliance at ``as_of`` and return drawer payload dict."""
     as_of = _ensure_utc(as_of)
@@ -496,6 +491,7 @@ def build_alert_detail(
         inputs_hash=inputs_hash,
         weekly_duty_seconds=weekly,
         as_of=as_of,
+        profile=profile,
     )
     state = run_state_machine(truncated)
 

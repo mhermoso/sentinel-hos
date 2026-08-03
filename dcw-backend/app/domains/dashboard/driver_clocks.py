@@ -21,7 +21,7 @@ from app.domains.engine.replay import (
     truncate_timeline_to,
 )
 from app.domains.engine.rule_pack import RulePack
-from app.domains.engine.schemas import DriverTimeline
+from app.domains.engine.schemas import DriverProfile, DriverTimeline
 from app.domains.engine.state_machine import run_state_machine
 
 AT_RISK_REMAINING_HOURS = 2.0
@@ -128,6 +128,7 @@ def build_driver_day_clocks(
     events: Sequence[DriverTimeline.HOSEvent],
     as_of: datetime,
     display_tz_name: str,
+    profile: DriverProfile | None = None,
 ) -> DriverDayClocks:
     """Recompute HOS gauges + shift/restart context at ``as_of`` (no violation matching)."""
     as_of = _ensure_utc(as_of)
@@ -165,6 +166,7 @@ def build_driver_day_clocks(
         inputs_hash=inputs_hash,
         weekly_duty_seconds=weekly,
         as_of=as_of,
+        profile=profile,
     )
     state = run_state_machine(truncated)
 

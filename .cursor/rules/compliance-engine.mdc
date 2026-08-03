@@ -11,19 +11,21 @@ alwaysApply: false
 - **100% deterministic** — pure state-machine logic, no probabilistic or LLM scoring
 - Target evaluation latency: <20 ms per driver timeline
 - Every audit record must bind `inputs_hash` + `rule_pack_version`
-- Default rule pack: `fmcsa-us-property@1.3.0` (SemVer: `fmcsa-us-property@MAJOR.MINOR.PATCH`)
+- Default rule pack: `fmcsa-us-property@2.5.0` (SemVer: `fmcsa-us-property@MAJOR.MINOR.PATCH`); Ruleset B uses `fmcsa-us-short-haul@1.0.0`
 
 ## Rule Pack Structure
 
-Orchestrate evaluation through `RulePack.evaluate()` in `rule_pack.py`. Calculators:
+Orchestrate evaluation through `RulePack.evaluate()` (thin router over pack
+modules in `packs/`). Rulesets A–D are implemented; Phase 6 findings run after
+clocks. Calculators:
 
-1. **11-Hour Driving Limit** — countdown after 10 consecutive hours off-duty
-2. **14-Hour Duty Window** — continuous elapsed shift window
-3. **30-Minute Rest Break** — after 8 cumulative driving hours without 30-min rest
+1. **11-Hour Driving Limit** — countdown after 10 consecutive hours off-duty (Driving only)
+2. **14-Hour Duty Window** — wall-clock from first ON/D/YM; VIOLATION only while Driving
+3. **30-Minute Rest Break** — after 8 cumulative driving hours; resets on any non-driving ≥30 min
 4. **60/70-Hour Weekly Cycle** — rolling 7- or 8-day duty aggregation
-5. **34-Hour Restart & Split Sleeper** — cycle reset (home-terminal 1–5 AM validation) and 14h clock pause
+5. **34-Hour Restart & Split Sleeper** — cycle reset on ≥34h OFF/SB (no 1–5 AM gate) and 7+3/8+2 split rematch
 
-Personal conveyance (`PC`) counts as off-duty rest; yard move (`YM`) counts as on-duty/driving. Historical replay lives in `replay.py` (used by backtest scripts).
+Personal conveyance (`PC`) counts as off-duty rest; yard move (`YM`) counts as on-duty (not driving). Historical replay lives in `replay.py` (used by backtest scripts).
 
 ## Sweeper & Alerting
 

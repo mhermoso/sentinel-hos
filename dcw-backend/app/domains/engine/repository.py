@@ -4,19 +4,28 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.domains.engine.models import AuditRecord
+from app.domains.engine.models import AuditRecord, DriverProfileRecord
 from app.domains.engine.replay import (
     WEEKLY_DUTY_LOOKBACK_BUFFER_DAYS,
     compute_weekly_duty_seconds,
 )
-from app.domains.engine.schemas import ComplianceResult, DriverTimeline
+from app.domains.engine.schemas import (
+    ComplianceResult,
+    DayAnnotations,
+    DriverProfile,
+    DriverTimeline,
+    HosCycle,
+    OperatingAuthority,
+    WorkReportingLocation,
+    default_driver_profile,
+)
+from app.domains.engine.short_haul import home_terminal_day
 from app.domains.ingestion.duty_filter import should_skip_duty_status_change
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.schemas import CanonicalDutyStatus
@@ -24,11 +33,122 @@ from app.domains.ingestion.schemas import CanonicalDutyStatus
 logger = logging.getLogger("dcw.engine.repository")
 
 
+def _record_to_profile(record: DriverProfileRecord) -> DriverProfile:
+    location = None
+    if record.work_reporting_lat is not None and record.work_reporting_lon is not None:
+        location = WorkReportingLocation(
+            latitude=record.work_reporting_lat,
+            longitude=record.work_reporting_lon,
+        )
+    return DriverProfile(
+        driver_id=record.driver_id,
+        tenant_id=record.tenant_id,
+        operating_authority=OperatingAuthority(record.operating_authority),
+        short_haul_eligible=bool(record.short_haul_eligible),
+        cdl_required=bool(record.cdl_required),
+        cycle=HosCycle.parse(str(record.cycle)),
+        home_terminal_timezone=record.home_terminal_timezone,
+        work_reporting_location=location,
+        vehicle_weight_class=record.vehicle_weight_class,
+        hazmat_placard=record.hazmat_placard,
+    )
+
+
 class EngineRepository:
     """Data-access layer for the compliance engine domain."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def get_driver_profile(
+        self,
+        tenant_id: str,
+        driver_id: str,
+    ) -> DriverProfile:
+        """Load a driver profile, or interstate 70/8 defaults when missing."""
+        stmt = select(DriverProfileRecord).where(
+            DriverProfileRecord.tenant_id == tenant_id,
+            DriverProfileRecord.driver_id == driver_id,
+        )
+        result = await self.session.execute(stmt)
+        record = result.scalar_one_or_none()
+        if record is None:
+            return default_driver_profile(driver_id=driver_id, tenant_id=tenant_id)
+        return _record_to_profile(record)
+
+    async def get_day_annotations(
+        self,
+        tenant_id: str,
+        driver_id: str,
+        *,
+        as_of: datetime,
+        home_terminal_timezone: str,
+    ) -> DayAnnotations:
+        """Load per home-terminal-day exception flags and form & manner evidence.
+
+        Persistence stub for Phase 6: returns empty annotations until a
+        day-annotation store (JSON map on profile or dedicated table) is wired.
+        Callers/tests may pass ``DayAnnotations`` directly into
+        ``RulePack.evaluate``.
+        """
+        day = home_terminal_day(as_of, home_terminal_timezone)
+        logger.debug(
+            "Day annotations stub tenant=%s driver=%s day=%s → empty",
+            tenant_id,
+            driver_id,
+            day,
+        )
+        return DayAnnotations()
+
+    async def upsert_driver_profile(self, profile: DriverProfile) -> DriverProfile:
+        """Insert or update a driver profile row and return the stored profile."""
+        lat = (
+            profile.work_reporting_location.latitude
+            if profile.work_reporting_location
+            else None
+        )
+        lon = (
+            profile.work_reporting_location.longitude
+            if profile.work_reporting_location
+            else None
+        )
+        now = datetime.now(timezone.utc)
+        stmt = (
+            pg_insert(DriverProfileRecord)
+            .values(
+                tenant_id=profile.tenant_id,
+                driver_id=profile.driver_id,
+                operating_authority=profile.operating_authority.value,
+                short_haul_eligible=profile.short_haul_eligible,
+                cdl_required=profile.cdl_required,
+                cycle=profile.cycle.value,
+                home_terminal_timezone=profile.home_terminal_timezone,
+                work_reporting_lat=lat,
+                work_reporting_lon=lon,
+                vehicle_weight_class=profile.vehicle_weight_class,
+                hazmat_placard=profile.hazmat_placard,
+                created_at=now,
+                updated_at=now,
+            )
+            .on_conflict_do_update(
+                constraint="uq_driver_profiles_tenant_driver",
+                set_={
+                    "operating_authority": profile.operating_authority.value,
+                    "short_haul_eligible": profile.short_haul_eligible,
+                    "cdl_required": profile.cdl_required,
+                    "cycle": profile.cycle.value,
+                    "home_terminal_timezone": profile.home_terminal_timezone,
+                    "work_reporting_lat": lat,
+                    "work_reporting_lon": lon,
+                    "vehicle_weight_class": profile.vehicle_weight_class,
+                    "hazmat_placard": profile.hazmat_placard,
+                    "updated_at": now,
+                },
+            )
+        )
+        await self.session.execute(stmt)
+        await self.session.flush()
+        return await self.get_driver_profile(profile.tenant_id, profile.driver_id)
 
     async def get_driver_timeline(
         self,

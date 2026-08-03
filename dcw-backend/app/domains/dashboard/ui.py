@@ -60,6 +60,7 @@ from app.domains.dashboard.timezone import (
     tz_abbreviation,
     zoneinfo_for,
 )
+from app.domains.engine.repository import EngineRepository
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.repository import IngestionRepository
 
@@ -332,12 +333,14 @@ async def _build_day_clocks_for_driver(
     if not records:
         return None
     events = logs_to_events(records)
+    profile = await EngineRepository(session).get_driver_profile(tenant_id, driver_id)
     return build_driver_day_clocks(
         driver_id=driver_id,
         tenant_id=tenant_id,
         events=events,
         as_of=as_of,
         display_tz_name=display_tz,
+        profile=profile,
     )
 
 
@@ -586,6 +589,7 @@ async def _alert_detail_page_context(
     db_name = next((r.driver_name for r in records if r.driver_name), None)
     driver_name = resolve_driver_name(driver_id, db_name)
     events = logs_to_events(records)
+    profile = await EngineRepository(session).get_driver_profile(tenant_id, driver_id)
     detail = build_alert_detail(
         driver_id=driver_id,
         tenant_id=tenant_id,
@@ -598,6 +602,7 @@ async def _alert_detail_page_context(
         description_hint=description,
         severity_hint=severity,
         rule_ref_hint=rule_ref,
+        profile=profile,
     )
     detail_model = AlertDetailResponse.model_validate(detail)
     detail_json = detail_model.model_dump(mode="json")

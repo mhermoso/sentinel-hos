@@ -15,7 +15,7 @@ alwaysApply: true
 
 - Modular monolith scaffold + ADRs 001–007 in place
 - Geotab ingestion live (DutyStatusLog + LogRecord GPS breadcrumbs); Motive/Samsara adapters are stubs
-- Engine rule pack `fmcsa-us-property@1.3.0` with sweeper, replay/backtest, unit tests
+- Engine rule pack `fmcsa-us-property@2.5.0` with ruleset router (A/B/C/D packs live), sweeper, replay/backtest, unit tests
 - Notifier (Twilio Voice/SMS + alert locks) and HTMX dashboard operational locally
 - Driver-day GPS route map (drawer / full page) available when breadcrumbs exist
 - WeasyPrint PDF reports and golden fixture suite still planned

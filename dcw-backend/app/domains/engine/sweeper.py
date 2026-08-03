@@ -12,21 +12,38 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List
 
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.core.redis import COMPLIANCE_ALERTS_CHANNEL, publish_event
 from app.core.security import compute_inputs_hash
-from app.domains.engine.replay import WEEKLY_DUTY_LOOKBACK_BUFFER_DAYS, compute_weekly_duty_seconds
+from app.domains.engine.replay import (
+    WEEKLY_DUTY_LOOKBACK_BUFFER_DAYS,
+    compute_weekly_duty_seconds,
+    truncate_timeline_to,
+)
 from app.domains.engine.repository import EngineRepository
 from app.domains.engine.rule_pack import RulePack
+from app.domains.engine.schemas import NON_TELEPHONY_FINDINGS, GpsFix, ViolationType
+from app.domains.engine.short_haul import (
+    assess_short_haul_exemption,
+    home_terminal_day,
+)
+from app.domains.engine.short_haul_counter import (
+    get_short_haul_failure_days,
+    record_short_haul_failure_day,
+)
+from app.domains.engine.state_machine import run_state_machine
 from app.domains.ingestion.repository import IngestionRepository
 
 logger = logging.getLogger("dcw.engine.sweeper")
 
 _rule_pack = RulePack(version=settings.DEFAULT_RULE_PACK_VERSION)
+
+# Dashboard/audit-only; do not dispatch telephony for risk / form findings.
+_NON_TELEPHONY_VIOLATIONS = NON_TELEPHONY_FINDINGS
 
 
 async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
@@ -47,6 +64,7 @@ async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
 
     async with async_session_factory() as session:
         repo = EngineRepository(session)
+        ing_repo = IngestionRepository(session)
 
         for driver_id in driver_ids:
             try:
@@ -83,12 +101,73 @@ async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
                     }
                 )
 
-                # 4. Evaluate rule pack
+                # 4. Load profile + GPS (short-haul + YM heuristics) / annotations
+                profile = await repo.get_driver_profile(tenant_id, driver_id)
+                day_annotations = await repo.get_day_annotations(
+                    tenant_id,
+                    driver_id,
+                    as_of=now,
+                    home_terminal_timezone=profile.home_terminal_timezone,
+                )
+                gps_start = now - timedelta(days=2)
+                crumbs = await ing_repo.get_gps_breadcrumbs_for_driver(
+                    tenant_id=tenant_id,
+                    driver_id=driver_id,
+                    start_utc=gps_start,
+                    end_utc=now + timedelta(seconds=1),
+                )
+                gps_fixes: List[GpsFix] = [
+                    GpsFix(
+                        latitude=float(c.latitude),
+                        longitude=float(c.longitude),
+                        timestamp=c.event_timestamp,
+                        speed_kmh=(
+                            float(c.speed_kmh) if c.speed_kmh is not None else None
+                        ),
+                    )
+                    for c in crumbs
+                ]
+                failure_days_30 = 0
+                if profile.short_haul_eligible:
+                    prior_days = await get_short_haul_failure_days(
+                        tenant_id,
+                        driver_id,
+                        as_of=now,
+                        home_terminal_timezone=profile.home_terminal_timezone,
+                    )
+                    eval_timeline = truncate_timeline_to(timeline, now)
+                    assessment = assess_short_haul_exemption(
+                        profile=profile,
+                        state=run_state_machine(eval_timeline),
+                        gps_fixes=gps_fixes,
+                        as_of=now,
+                    )
+                    today = home_terminal_day(now, profile.home_terminal_timezone)
+                    failure_days_30 = len(prior_days)
+                    if not assessment.ok and today not in prior_days:
+                        failure_days_30 += 1
+
                 result = _rule_pack.evaluate(
                     timeline=timeline,
                     inputs_hash=inputs_hash,
                     weekly_duty_seconds=weekly_seconds,
+                    as_of=now,
+                    profile=profile,
+                    gps_fixes=gps_fixes,
+                    short_haul_failure_days_30=failure_days_30,
+                    day_annotations=day_annotations,
                 )
+
+                if profile.short_haul_eligible and any(
+                    v.violation_type == ViolationType.EXEMPTION_LOST
+                    for v in result.violations
+                ):
+                    await record_short_haul_failure_day(
+                        tenant_id,
+                        driver_id,
+                        as_of=now,
+                        home_terminal_timezone=profile.home_terminal_timezone,
+                    )
 
                 # 5. Persist audit record
                 await repo.persist_audit_record(result)
@@ -96,9 +175,17 @@ async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
 
                 swept += 1
 
-                # 6. Publish violations to Redis pub/sub
+                # 6. Publish violations to Redis pub/sub (skip non-telephony findings)
                 if result.violations:
                     for violation in result.violations:
+                        if violation.violation_type in _NON_TELEPHONY_VIOLATIONS:
+                            logger.info(
+                                "Skipping telephony for %s driver=%s ruleset=%s",
+                                violation.violation_type.value,
+                                driver_id,
+                                result.selected_ruleset,
+                            )
+                            continue
                         event_payload = json.dumps(
                             {
                                 "tenant_id": tenant_id,
@@ -108,6 +195,16 @@ async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
                                     "driving_remaining_seconds": result.driving_remaining_seconds,
                                     "duty_window_remaining_seconds": result.duty_window_remaining_seconds,
                                     "break_required": result.break_required,
+                                    "selected_ruleset": (
+                                        result.selected_ruleset.value
+                                        if result.selected_ruleset
+                                        else None
+                                    ),
+                                    "ruleset_status": (
+                                        result.ruleset_status.value
+                                        if result.ruleset_status
+                                        else None
+                                    ),
                                 },
                             },
                             default=str,

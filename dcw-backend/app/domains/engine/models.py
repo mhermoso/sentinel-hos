@@ -3,6 +3,7 @@
 Tables:
 - ``audit_records`` — immutable cryptographically-linked compliance outputs.
 - ``log_event_edits`` — full FMCSA § 395 edit audit trail.
+- ``driver_profiles`` — mutable per-driver ruleset configuration (Phase 3+).
 """
 
 from __future__ import annotations
@@ -19,11 +20,67 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.core.database import Base
+
+
+class DriverProfileRecord(Base):
+    """Tenant-scoped driver profile used for daily ruleset selection.
+
+    Mutable onboarding/config table (not append-only). Missing rows are
+    treated as interstate 70/8 defaults by the repository layer.
+    """
+
+    __tablename__ = "driver_profiles"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    tenant_id = Column(String(128), nullable=False)
+    driver_id = Column(String(128), nullable=False)
+    operating_authority = Column(
+        String(32), nullable=False, server_default=text("'INTERSTATE'")
+    )
+    short_haul_eligible = Column(Boolean, nullable=False, server_default=text("false"))
+    cdl_required = Column(Boolean, nullable=False, server_default=text("true"))
+    cycle = Column(String(16), nullable=False, server_default=text("'70_8'"))
+    home_terminal_timezone = Column(String(64), nullable=False)
+    work_reporting_lat = Column(Float, nullable=True)
+    work_reporting_lon = Column(Float, nullable=True)
+    vehicle_weight_class = Column(String(64), nullable=True)
+    hazmat_placard = Column(Boolean, nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("NOW()"),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("NOW()"),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "driver_id", name="uq_driver_profiles_tenant_driver"),
+        Index("ix_driver_profiles_tenant_driver", "tenant_id", "driver_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<DriverProfileRecord driver={self.driver_id} "
+            f"authority={self.operating_authority} cycle={self.cycle}>"
+        )
+
 
 
 class AuditRecord(Base):

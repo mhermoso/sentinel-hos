@@ -1,4 +1,4 @@
-"""Engine tests: personal conveyance counts as rest; yard-move as driving/duty."""
+"""Engine tests: personal conveyance counts as rest; yard-move as duty (not driving)."""
 
 from __future__ import annotations
 
@@ -57,8 +57,8 @@ def test_pc_does_not_count_toward_weekly_duty() -> None:
     assert seconds == pytest.approx(0.0)
 
 
-def test_yard_move_counts_as_driving_and_weekly_duty() -> None:
-    """YM after 10h OFF accumulates driving and weekly duty (not rest)."""
+def test_yard_move_counts_as_duty_not_driving() -> None:
+    """YM after 10h OFF accumulates weekly/duty window but not the 11h driving clock."""
     events = [
         DriverTimeline.HOSEvent(
             status=CanonicalDutyStatus.OFF_DUTY.value,
@@ -77,8 +77,12 @@ def test_yard_move_counts_as_driving_and_weekly_duty() -> None:
     result = run_state_machine(timeline)
 
     assert result.current_shift is not None
-    assert result.current_shift.cumulative_driving_seconds == pytest.approx(2 * 3600.0)
-    assert result.total_driving_seconds == pytest.approx(2 * 3600.0)
+    assert result.current_shift.cumulative_driving_seconds == pytest.approx(0.0)
+    assert result.total_driving_seconds == pytest.approx(0.0)
+    assert result.current_shift.cumulative_duty_seconds == pytest.approx(2 * 3600.0)
+    assert result.duty_window_start == _ts(10)
+    # Wall-clock from YM start to last event (OFF at +2h)
+    assert result.duty_window_elapsed_seconds == pytest.approx(2 * 3600.0)
 
     weekly = compute_weekly_duty_seconds(events, as_of=_ts(12), cycle_days=8)
     assert weekly == pytest.approx(2 * 3600.0)

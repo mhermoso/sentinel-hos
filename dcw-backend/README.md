@@ -154,7 +154,7 @@ make backtest-sweeper
 make backtest-event-export
 # or: python scripts/backtest_alerts.py --mode event --csv --html
 
-Rule pack `fmcsa-us-property@1.3.0` credits valid 34-hour OFF/SB restarts in weekly duty totals (two 1–5 AM periods in `DEFAULT_HOME_TERMINAL_TIMEZONE`, default US Central).
+Rule pack `fmcsa-us-property@2.5.0` credits ≥34h consecutive OFF/SB restarts in weekly duty totals (no 1–5 AM gate). Severity follows PDF §8.3 mapped onto `WARNING`/`VIOLATION`/`CRITICAL` (60 min advisory, weekly >90% used, CRITICAL when driving/duty overage >15 min). Ruleset router covers A/B/C/D packs.
 
 # Optional: load history into Postgres for dashboard / live sweeper testing
 python scripts/fetch_hos_history.py --days 30 --persist

@@ -82,3 +82,8 @@ def alert_lock_key(
 ) -> str:
     """Build the idempotency lock key that prevents duplicate alerts."""
     return f"alert_lock:{tenant_id}:{driver_id}:{shift_id}:{rule}:{stage}"
+
+
+def short_haul_fail_days_key(tenant_id: str, driver_id: str) -> str:
+    """Redis SET of home-terminal ISO dates with short-haul exemption failures."""
+    return f"short_haul_fail_days:{tenant_id}:{driver_id}"

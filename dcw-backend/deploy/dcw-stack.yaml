@@ -19,7 +19,7 @@ data:
   REDIS_DB: "0"
   DATABASE_URL: postgresql+asyncpg://dcw_user:dcw_secure_password@dcw-postgres:5432/dcw_compliance_db
   REDIS_URL: redis://dcw-redis:6379/0
-  DEFAULT_RULE_PACK_VERSION: fmcsa-us-property@1.2.0
+  DEFAULT_RULE_PACK_VERSION: fmcsa-us-property@2.5.0
   POLL_INTERVAL_SECONDS: "120"
 ---
 apiVersion: v1

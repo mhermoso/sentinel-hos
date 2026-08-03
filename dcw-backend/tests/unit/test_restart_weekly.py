@@ -1,4 +1,4 @@
-"""Unit tests for 34-hour restart weekly cycle reset."""
+"""Unit tests for 34-hour restart weekly cycle reset (no 1–5 AM gate)."""
 
 from __future__ import annotations
 
@@ -11,14 +11,16 @@ from zoneinfo import ZoneInfo
 
 from app.core.config import settings
 from app.core.security import compute_inputs_hash
+from app.domains.engine.calculators import check_restart
 from app.domains.engine.replay import (
     compute_weekly_duty_seconds,
-    count_1_to_5_am_periods,
     find_restart_reset_point,
+    is_valid_restart_period,
     logs_to_timeline_events,
 )
 from app.domains.engine.rule_pack import RulePack
 from app.domains.engine.schemas import DriverTimeline, ViolationType
+from app.domains.engine.state_machine import StateMachineResult, run_state_machine
 from app.domains.ingestion.schemas import CanonicalDutyStatus, DCWCanonicalHOSLog
 
 UTC = timezone.utc
@@ -33,13 +35,12 @@ def _ts(year: int, month: int, day: int, hour: int, minute: int = 0) -> datetime
 
 
 def _heavy_duty_then_restart_timeline() -> list[DriverTimeline.HOSEvent]:
-    """70h duty, then 35h OFF spanning two Chicago 1–5 AM days, then ON."""
+    """70h duty, then 35h OFF, then ON."""
     events = [
         DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(2026, 7, 10, 0)),
     ]
     duty_start = _ts(2026, 7, 10, 10)
     events.append(DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=duty_start))
-    # 70 hours of driving segments (simplified as one long block ending before restart)
     events.append(
         DriverTimeline.HOSEvent(
             status=CanonicalDutyStatus.OFF_DUTY.value,
@@ -47,7 +48,6 @@ def _heavy_duty_then_restart_timeline() -> list[DriverTimeline.HOSEvent]:
         )
     )
     restart_start = duty_start + timedelta(hours=70)
-    # 35h OFF — covers 7/13 and 7/14 early mornings in US Central
     events.append(
         DriverTimeline.HOSEvent(
             status=CanonicalDutyStatus.ON_DUTY.value,
@@ -57,10 +57,16 @@ def _heavy_duty_then_restart_timeline() -> list[DriverTimeline.HOSEvent]:
     return events
 
 
-def test_count_1_to_5_am_periods_two_days() -> None:
-    start = _ts(2026, 7, 25, 6, 0)  # 00:00 CDT
-    end = _ts(2026, 7, 27, 6, 0)
-    assert count_1_to_5_am_periods(start, end, CHICAGO) >= 2
+def test_is_valid_restart_requires_34h_only() -> None:
+    start = _ts(2026, 7, 21, 11)
+    assert is_valid_restart_period(start, start + timedelta(hours=33, minutes=59)) is False
+    assert is_valid_restart_period(start, start + timedelta(hours=34)) is True
+    # home_terminal_tz ignored
+    assert is_valid_restart_period(
+        start,
+        start + timedelta(hours=34),
+        home_terminal_tz=CHICAGO,
+    )
 
 
 def test_34h_restart_resets_weekly_duty() -> None:
@@ -75,9 +81,8 @@ def test_34h_restart_resets_weekly_duty() -> None:
     assert weekly < 70 * 3600
 
 
-def test_restart_without_two_am_periods_no_reset() -> None:
-    """34h OFF spanning only one 1–5 AM home-terminal day does not reset weekly duty."""
-    # 34h rest Jul 21 11:00 UTC → Jul 22 21:00 UTC (only Jul 22 1–5 AM CDT overlaps)
+def test_34h_restart_without_two_am_periods_still_resets() -> None:
+    """≥34h OFF resets weekly duty even when only one 1–5 AM local day overlaps."""
     off_start = _ts(2026, 7, 21, 11)
     on_duty = off_start + timedelta(hours=34)
     events = [
@@ -87,33 +92,53 @@ def test_restart_without_two_am_periods_no_reset() -> None:
         DriverTimeline.HOSEvent(status=CanonicalDutyStatus.ON_DUTY.value, timestamp=on_duty),
     ]
     as_of = on_duty
-    assert count_1_to_5_am_periods(off_start, on_duty, CHICAGO) == 1
     reset = find_restart_reset_point(events, as_of, home_terminal_tz=CHICAGO)
-    assert reset is None
+    assert reset == on_duty
     weekly = compute_weekly_duty_seconds(events, as_of=as_of, cycle_days=8, home_terminal_tz=CHICAGO)
-    assert weekly == pytest.approx(25 * 3600.0)
+    assert weekly == pytest.approx(0.0)
 
 
-def test_rolling_window_after_restart_ages_out() -> None:
-    """Duty more than 8 days after a valid restart uses only the rolling window."""
-    restart_on = _ts(2026, 1, 1, 12)
-    duty_start = _ts(2026, 1, 4, 8)
+def test_check_restart_never_emits() -> None:
+    state = StateMachineResult(had_34h_restart=True)
+    assert check_restart(state, _ts(2026, 7, 22, 12)) == []
+
+
+def test_state_machine_credits_34h_restart() -> None:
+    off_start = _ts(2026, 7, 20, 0)
+    on_duty = off_start + timedelta(hours=35)
     events = [
-        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(2025, 12, 30, 0)),
-        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=restart_on),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=off_start),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.ON_DUTY.value, timestamp=on_duty),
         DriverTimeline.HOSEvent(
-            status=CanonicalDutyStatus.OFF_DUTY.value,
-            timestamp=restart_on + timedelta(hours=4),
-        ),
-        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=duty_start),
-        DriverTimeline.HOSEvent(
-            status=CanonicalDutyStatus.OFF_DUTY.value,
-            timestamp=duty_start + timedelta(hours=4),
+            status=CanonicalDutyStatus.ON_DUTY.value,
+            timestamp=on_duty + timedelta(hours=1),
         ),
     ]
-    as_of = restart_on + timedelta(days=10)
+    timeline = DriverTimeline(driver_id="d1", tenant_id="t1", events=events)
+    result = run_state_machine(timeline)
+    assert result.had_34h_restart is True
+    assert result.last_valid_restart_at == on_duty
+
+
+def test_rolling_window_ages_out_without_34h_rest() -> None:
+    """Without a 34h rest, only duty inside the trailing 8-day window counts."""
+    events: list[DriverTimeline.HOSEvent] = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(2026, 1, 1, 0)),
+    ]
+    # 10 calendar days of 4h driving with ~20h OFF between — never ≥34h consecutive rest
+    for day in range(10):
+        drive_start = _ts(2026, 1, 1 + day, 8)
+        drive_end = drive_start + timedelta(hours=4)
+        events.append(
+            DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=drive_start)
+        )
+        events.append(
+            DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=drive_end)
+        )
+    as_of = _ts(2026, 1, 11, 8)
     weekly = compute_weekly_duty_seconds(events, as_of=as_of, cycle_days=8, home_terminal_tz=CHICAGO)
-    assert weekly == pytest.approx(4 * 3600.0)
+    # Cutoff = Jan 3 08:00 → full 4h days on Jan 3..Jan 10 = 8 days
+    assert weekly == pytest.approx(8 * 4 * 3600.0)
 
 
 @pytest.mark.skipif(not _DATA_PATH.exists(), reason="hos_10d_canonical.json not present")
@@ -142,6 +167,7 @@ def test_cesar_garza_scenario() -> None:
     )
     weekly_violations = [v for v in result.violations if v.violation_type == ViolationType.WEEKLY_CYCLE]
     assert not weekly_violations
+    assert not any(v.violation_type == ViolationType.RESTART_INVALID for v in result.violations)
 
     reset = find_restart_reset_point(events, as_of, home_terminal_tz=CHICAGO)
     assert reset is not None

@@ -156,7 +156,7 @@ def test_build_driver_day_clocks_shift_start_after_qualifying_rest() -> None:
 
 
 def test_build_driver_day_clocks_reports_34h_restart() -> None:
-    """Long OFF spanning two 1–5 AM periods → valid 34h restart in window."""
+    """Long OFF ≥34h → valid restart in window."""
     start = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
     events = [
         DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=start),

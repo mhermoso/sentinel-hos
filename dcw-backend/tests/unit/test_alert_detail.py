@@ -125,7 +125,8 @@ def test_driving_limit_with_restart_shows_weekly_section() -> None:
     )
     assert detail["weekly_restart"]["had_restart"] is True
     assert detail["weekly_restart"]["restart_at_local"] is not None
-    assert "34h OFF/SB" in detail["weekly_restart"]["message"]
+    assert "34h" in detail["weekly_restart"]["message"]
+    assert "OFF/SB" in detail["weekly_restart"]["message"]
     assert detail["clocks"]["weekly_window_subtitle"] == "after 34h restart"
     assert detail["clocks"]["had_34h_restart"] is True
     assert any(s["step"] == "Weekly cycle (context)" for s in detail["explanation"])
@@ -133,7 +134,7 @@ def test_driving_limit_with_restart_shows_weekly_section() -> None:
 
 
 def test_weekly_detail_mentions_restart_window() -> None:
-    """Heavy duty, then 35h OFF spanning two 1–5 AM periods, then ON — weekly near 0."""
+    """Heavy duty, then 35h OFF, then ON — weekly near 0 after restart."""
     # Start duty Monday morning UTC, then long OFF covering two Chicago early mornings
     start = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
     events = [
