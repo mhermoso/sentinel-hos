@@ -570,14 +570,15 @@ def markers_from_audit_violations(
 def merge_alert_markers(
     *marker_groups: Sequence[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Deduplicate markers by (type, severity, source, minute bucket) and sort."""
-    seen: set[Tuple[str, str, str, str]] = set()
+    """Deduplicate markers by (driver, type, severity, source, minute) and sort."""
+    seen: set[Tuple[str, str, str, str, str]] = set()
     merged: List[Dict[str, Any]] = []
     for group in marker_groups:
         for marker in group:
             as_of = _ensure_utc(marker["as_of"])
             minute_bucket = as_of.replace(second=0, microsecond=0).isoformat()
             key = (
+                str(marker.get("driver_id", "")),
                 minute_bucket,
                 str(marker.get("violation_type", "")),
                 str(marker.get("severity", "")),

@@ -119,6 +119,18 @@ async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
                 logger.error(
                     "Sweeper error for driver %s: %s", driver_id, exc, exc_info=True
                 )
+                # A failed flush/commit aborts the shared session transaction.
+                # Without rollback, every subsequent driver hits PendingRollbackError
+                # and is silently skipped for the rest of the sweep.
+                try:
+                    await session.rollback()
+                except Exception as rollback_exc:
+                    logger.error(
+                        "Sweeper rollback failed after error for driver %s: %s",
+                        driver_id,
+                        rollback_exc,
+                        exc_info=True,
+                    )
                 continue
 
     logger.info(
