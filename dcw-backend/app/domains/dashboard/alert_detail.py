@@ -24,6 +24,7 @@ from app.domains.engine.rule_pack import RulePack
 from app.domains.engine.schemas import DriverTimeline, Violation, ViolationType
 from app.domains.engine.state_machine import run_state_machine
 from app.domains.ingestion.duty_filter import should_skip_duty_status_change
+from app.domains.ingestion.hos_versions import select_latest_hos_versions
 from app.domains.ingestion.schemas import CanonicalDutyStatus
 
 RESTART_SECONDS = 34 * 3600.0
@@ -535,7 +536,7 @@ def build_alert_detail(
 def logs_to_events(records: Sequence[Any]) -> List[DriverTimeline.HOSEvent]:
     """Convert ORM/canonical log-like objects to timeline events."""
     events: List[DriverTimeline.HOSEvent] = []
-    for rec in records:
+    for rec in select_latest_hos_versions(records):
         status = getattr(rec, "status", None)
         ts = getattr(rec, "event_timestamp", None)
         if status is None or ts is None:

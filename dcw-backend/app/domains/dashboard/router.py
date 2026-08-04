@@ -87,6 +87,7 @@ from app.domains.dashboard.schemas import (
 from app.domains.dashboard.timezone import default_display_timezone, zoneinfo_for
 from app.domains.engine.models import AuditRecord
 from app.domains.engine.repository import EngineRepository
+from app.domains.ingestion.hos_versions import select_latest_hos_versions
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.repository import IngestionRepository
 from app.domains.notifier.alert_logger import read_alert_log
@@ -185,7 +186,7 @@ async def _fetch_driver_events_for_day(
         .order_by(CanonicalHOSLogRecord.event_timestamp.asc())
     )
     result = await session.execute(stmt)
-    records = list(result.scalars().all())
+    records = select_latest_hos_versions(list(result.scalars().all()))
     db_name: str | None = None
     for rec in records:
         if rec.driver_name:

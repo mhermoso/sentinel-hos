@@ -32,7 +32,10 @@ class IngestionRepository:
         self,
         logs: List[DCWCanonicalHOSLog],
     ) -> int:
-        """Insert canonical HOS logs into PostgreSQL (append-only, dedup by raw_id).
+        """Insert canonical HOS logs (append-only).
+
+        Dedup key is ``(tenant_id, raw_id, inputs_hash)`` so Geotab GetFeed
+        edits of the same DutyStatusLog id append as superseding versions.
 
         Returns the number of rows actually inserted (skips duplicates).
         """
@@ -60,7 +63,7 @@ class IngestionRepository:
                 raw_payload=log.raw_payload,
                 inputs_hash=inputs_hash,
             ).on_conflict_do_nothing(
-                index_elements=["tenant_id", "raw_id"],
+                index_elements=["tenant_id", "raw_id", "inputs_hash"],
             )
 
             result = await self.session.execute(stmt)
@@ -129,7 +132,10 @@ class IngestionRepository:
                 CanonicalHOSLogRecord.device_id == device_id,
                 CanonicalHOSLogRecord.event_timestamp <= as_of,
             )
-            .order_by(CanonicalHOSLogRecord.event_timestamp.desc())
+            .order_by(
+                CanonicalHOSLogRecord.event_timestamp.desc(),
+                CanonicalHOSLogRecord.ingested_at.desc(),
+            )
             .limit(1)
         )
         result = await self.session.execute(stmt)
