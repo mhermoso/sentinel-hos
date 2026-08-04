@@ -36,10 +36,13 @@ def compute_inputs_hash(canonical_fields: Dict[str, Any]) -> str:
 def hash_canonical_log(log_dict: Dict[str, Any]) -> str:
     """Hash the compliance-relevant fields of a canonical HOS log.
 
-    Only fields that affect compliance calculations are included in
-    the digest — ``raw_payload`` and ``annotation`` are excluded since
-    they are informational metadata and do not influence rule evaluation.
+    Includes provider edit markers (``version``, ``isIgnored``,
+    ``eventRecordStatus``) so Geotab GetFeed superseding edits hash
+    differently from the originally ingested row. Annotation text remains
+    excluded as informational metadata.
     """
+    payload = log_dict.get("raw_payload")
+    payload_dict = payload if isinstance(payload, dict) else {}
     relevant_fields = {
         "tenant_id": log_dict.get("tenant_id"),
         "driver_id": log_dict.get("driver_id"),
@@ -50,6 +53,9 @@ def hash_canonical_log(log_dict: Dict[str, Any]) -> str:
         "latitude": log_dict.get("latitude"),
         "longitude": log_dict.get("longitude"),
         "odometer_km": log_dict.get("odometer_km"),
+        "provider_version": payload_dict.get("version"),
+        "is_ignored": payload_dict.get("isIgnored"),
+        "event_record_status": payload_dict.get("eventRecordStatus"),
     }
     return compute_inputs_hash(relevant_fields)
 

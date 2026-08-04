@@ -57,7 +57,44 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_canonical_dedup_index)
         await conn.run_sync(_ensure_append_only_triggers)
+
+
+def _ensure_canonical_dedup_index(connection) -> None:
+    """Migrate unique dedup from (tenant, raw_id) to (tenant, raw_id, inputs_hash).
+
+    Older schemas rejected Geotab DutyStatusLog edits because GetFeed reuses
+    the same id. ``create_all`` does not alter existing indexes.
+    """
+    from sqlalchemy import text
+
+    connection.execute(
+        text(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM pg_indexes
+                    WHERE schemaname = ANY (current_schemas(false))
+                      AND indexname = 'ix_canonical_dedup'
+                      AND indexdef NOT LIKE '%inputs_hash%'
+                ) THEN
+                    DROP INDEX IF EXISTS ix_canonical_dedup;
+                END IF;
+            END $$;
+            """
+        )
+    )
+    connection.execute(
+        text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_canonical_dedup
+            ON canonical_hos_logs (tenant_id, raw_id, inputs_hash)
+            """
+        )
+    )
 
 
 def _ensure_append_only_triggers(connection) -> None:

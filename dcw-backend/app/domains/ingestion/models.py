@@ -65,10 +65,13 @@ class CanonicalHOSLogRecord(Base):
             "driver_id",
             "event_timestamp",
         ),
+        # Geotab re-emits the same DutyStatusLog id on edits; allow one row
+        # per distinct content hash so superseding versions append.
         Index(
             "ix_canonical_dedup",
             "tenant_id",
             "raw_id",
+            "inputs_hash",
             unique=True,
         ),
     )
