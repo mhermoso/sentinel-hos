@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from app.core.config import settings
 from app.domains.engine.schemas import DriverTimeline
 from app.domains.ingestion.duty_filter import should_skip_duty_status_change
+from app.domains.ingestion.hos_versions import select_latest_hos_versions
 from app.domains.ingestion.schemas import CanonicalDutyStatus, DCWCanonicalHOSLog
 
 _DUTY_STATUSES = {
@@ -33,13 +34,13 @@ def logs_to_timeline_events(
     logs: Sequence[DCWCanonicalHOSLog],
 ) -> List[DriverTimeline.HOSEvent]:
     """Convert canonical HOS logs to timeline events (chronological)."""
-    sorted_logs = sorted(logs, key=lambda log: log.event_timestamp)
+    latest_logs = select_latest_hos_versions(logs)
     return [
         DriverTimeline.HOSEvent(
             status=log.status.value,
             timestamp=log.event_timestamp,
         )
-        for log in sorted_logs
+        for log in latest_logs
         if not should_skip_duty_status_change(log.status, log.raw_payload)
     ]
 

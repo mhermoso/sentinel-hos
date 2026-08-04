@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.config import settings
 from app.domains.ingestion.duty_filter import should_skip_duty_status_change
+from app.domains.ingestion.hos_versions import select_latest_hos_versions
 
 logger = logging.getLogger("dcw.dashboard.day_builder")
 
@@ -297,7 +298,8 @@ def build_day_points(
     start = bounds.start_utc
     end = bounds.end_utc
 
-    sorted_events = sorted(events, key=lambda e: _ensure_utc(e.event_timestamp))
+    # Prefer newest GetFeed version per raw_id before skip/carry logic.
+    sorted_events = select_latest_hos_versions(events)
     carry_any: Optional[str] = None
     carry_duty: Optional[str] = None
     carry_odo: Optional[float] = None

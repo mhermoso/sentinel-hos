@@ -18,6 +18,7 @@ from app.domains.engine.replay import (
 )
 from app.domains.engine.schemas import ComplianceResult, DriverTimeline
 from app.domains.ingestion.duty_filter import should_skip_duty_status_change
+from app.domains.ingestion.hos_versions import select_latest_hos_versions
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.schemas import CanonicalDutyStatus
 
@@ -62,7 +63,7 @@ class EngineRepository:
         )
 
         result = await self.session.execute(stmt)
-        records = list(result.scalars().all())
+        records = select_latest_hos_versions(list(result.scalars().all()))
 
         events = [
             DriverTimeline.HOSEvent(
@@ -109,7 +110,7 @@ class EngineRepository:
         )
 
         result = await self.session.execute(stmt)
-        records = list(result.scalars().all())
+        records = select_latest_hos_versions(list(result.scalars().all()))
 
         events = [
             DriverTimeline.HOSEvent(
