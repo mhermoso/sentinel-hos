@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from datetime import UTC, datetime
+from typing import Any, Literal
 
 from app.core.ops_log import read_ops_log
 from app.domains.dashboard.driver_names import resolve_driver_name
@@ -24,23 +24,23 @@ class LogFeedRow:
     source: LogSource
     level: str
     driver_id: str
-    driver_name: Optional[str]
+    driver_name: str | None
     message: str
     process: str = ""
 
 
-def _parse_ts(value: Any) -> Optional[datetime]:
+def _parse_ts(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
     text = str(value).strip()
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(UTC)
     except ValueError:
         return None
 
@@ -56,8 +56,8 @@ def _classify_ops_logger(logger_name: str) -> LogSource:
     return "system"
 
 
-def rows_from_ops(limit: int = 100) -> List[LogFeedRow]:
-    rows: List[LogFeedRow] = []
+def rows_from_ops(limit: int = 100) -> list[LogFeedRow]:
+    rows: list[LogFeedRow] = []
     for rec in read_ops_log(limit=limit):
         ts = _parse_ts(rec.get("timestamp"))
         if ts is None:
@@ -77,8 +77,8 @@ def rows_from_ops(limit: int = 100) -> List[LogFeedRow]:
     return rows
 
 
-def rows_from_alerts(limit: int = 50) -> List[LogFeedRow]:
-    rows: List[LogFeedRow] = []
+def rows_from_alerts(limit: int = 50) -> list[LogFeedRow]:
+    rows: list[LogFeedRow] = []
     for rec in read_alert_log(limit=limit):
         ts = _parse_ts(rec.get("timestamp"))
         if ts is None:
@@ -103,8 +103,8 @@ def rows_from_alerts(limit: int = 50) -> List[LogFeedRow]:
     return rows
 
 
-def rows_from_ingestion(events: List[Any]) -> List[LogFeedRow]:
-    rows: List[LogFeedRow] = []
+def rows_from_ingestion(events: list[Any]) -> list[LogFeedRow]:
+    rows: list[LogFeedRow] = []
     for ev in events:
         ts = _parse_ts(getattr(ev, "ingested_at", None))
         if ts is None:
@@ -115,7 +115,7 @@ def rows_from_ingestion(events: List[Any]) -> List[LogFeedRow]:
         event_ts = getattr(ev, "event_timestamp", None)
         event_label = ""
         if isinstance(event_ts, datetime):
-            event_label = event_ts.astimezone(timezone.utc).strftime("%H:%M:%S UTC")
+            event_label = event_ts.astimezone(UTC).strftime("%H:%M:%S UTC")
         msg = f"Ingested {status}" + (f" @ {event_label}" if event_label else "")
         if raw_id:
             msg += f" (raw_id={raw_id})"
@@ -133,8 +133,8 @@ def rows_from_ingestion(events: List[Any]) -> List[LogFeedRow]:
     return rows
 
 
-def rows_from_audit(records: List[Any]) -> List[LogFeedRow]:
-    rows: List[LogFeedRow] = []
+def rows_from_audit(records: list[Any]) -> list[LogFeedRow]:
+    rows: list[LogFeedRow] = []
     for rec in records:
         ts = _parse_ts(getattr(rec, "evaluated_at", None))
         if ts is None:
@@ -162,11 +162,11 @@ def rows_from_audit(records: List[Any]) -> List[LogFeedRow]:
 
 
 def merge_feed_rows(
-    *groups: List[LogFeedRow],
+    *groups: list[LogFeedRow],
     source_filter: LogFilter = "all",
     limit: int = 100,
-) -> List[LogFeedRow]:
-    merged: List[LogFeedRow] = []
+) -> list[LogFeedRow]:
+    merged: list[LogFeedRow] = []
     for group in groups:
         merged.extend(group)
     if source_filter != "all":
@@ -175,10 +175,10 @@ def merge_feed_rows(
     return merged[:limit]
 
 
-def infer_worker_status(ops_rows: List[LogFeedRow], *, now: Optional[datetime] = None) -> Dict[str, Any]:
+def infer_worker_status(ops_rows: list[LogFeedRow], *, now: datetime | None = None) -> dict[str, Any]:
     """Infer worker health from recent ops / ingestion-tagged rows."""
-    now_utc = now or datetime.now(timezone.utc)
-    worker_ts: Optional[datetime] = None
+    now_utc = now or datetime.now(UTC)
+    worker_ts: datetime | None = None
     for row in ops_rows:
         if row.process == "worker" or row.source == "ingestion":
             if worker_ts is None or row.timestamp > worker_ts:

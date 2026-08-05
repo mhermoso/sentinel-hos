@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -16,16 +16,16 @@ from app.domains.engine.rule_pack import RulePack
 from app.domains.engine.schemas import (
     NON_TELEPHONY_FINDINGS,
     DayAnnotations,
+    DriverTimeline,
     GpsFix,
     LogEditEvidence,
     ViolationSeverity,
     ViolationType,
     WorkReportingLocation,
-    DriverTimeline,
 )
 from app.domains.ingestion.schemas import CanonicalDutyStatus
 
-UTC = timezone.utc
+UTC = UTC
 
 
 def _ts(hours: float) -> datetime:

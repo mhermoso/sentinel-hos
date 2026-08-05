@@ -10,8 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import redis.asyncio as aioredis
 
@@ -40,7 +39,7 @@ def _resolve_phones(alert: ComplianceAlert) -> ComplianceAlert:
     )
 
 
-def _parse_alert_event(message_data: str) -> Optional[ComplianceAlert]:
+def _parse_alert_event(message_data: str) -> ComplianceAlert | None:
     """Parse a raw Redis pub/sub message into a ComplianceAlert."""
     try:
         payload = json.loads(message_data)
@@ -53,7 +52,7 @@ def _parse_alert_event(message_data: str) -> Optional[ComplianceAlert]:
             rule_ref=violation.get("rule_ref", ""),
             description=violation.get("description", ""),
             detected_at=datetime.fromisoformat(
-                violation.get("detected_at", datetime.now(timezone.utc).isoformat())
+                violation.get("detected_at", datetime.now(UTC).isoformat())
             ),
             overage_seconds=violation.get("overage_seconds", 0.0),
         )
@@ -65,7 +64,7 @@ def _parse_alert_event(message_data: str) -> Optional[ComplianceAlert]:
 async def _dispatch_alert(alert: ComplianceAlert) -> None:
     """Apply suppression check then dispatch voice + SMS."""
     alert = _resolve_phones(alert)
-    shift_id = datetime.now(timezone.utc).strftime("%Y%m%d")
+    shift_id = datetime.now(UTC).strftime("%Y%m%d")
 
     suppressed, reason = await should_suppress_alert(
         tenant_id=alert.tenant_id,
@@ -111,8 +110,8 @@ async def _dispatch_alert(alert: ComplianceAlert) -> None:
         settings.ALERT_DRY_RUN,
     )
 
-    voice_sid: Optional[str] = None
-    sms_sid: Optional[str] = None
+    voice_sid: str | None = None
+    sms_sid: str | None = None
     dispatch_action = "dry_run" if settings.ALERT_DRY_RUN else "dispatch"
 
     if alert.driver_phone and alert.severity in (

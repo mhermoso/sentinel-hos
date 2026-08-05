@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -16,8 +16,8 @@ class _FeedEvent:
     """Minimal stand-in for RecentIngestionItemResponse in templates."""
 
     def __init__(self) -> None:
-        self.ingested_at = datetime(2026, 7, 31, 2, 30, tzinfo=timezone.utc)
-        self.event_timestamp = datetime(2026, 7, 31, 2, 28, 19, tzinfo=timezone.utc)
+        self.ingested_at = datetime(2026, 7, 31, 2, 30, tzinfo=UTC)
+        self.event_timestamp = datetime(2026, 7, 31, 2, 28, 19, tzinfo=UTC)
         self.driver_id = "b382"
         self.driver_name = "Cesar Garza"
         self.status = "PC"

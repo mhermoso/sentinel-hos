@@ -3,24 +3,24 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
 class DriverStatusResponse(BaseModel):
     """Live driver status pulled from Redis + latest audit record."""
 
     driver_id: str
-    driver_name: Optional[str] = None
+    driver_name: str | None = None
     tenant_id: str
     current_status: str
-    last_event_at: Optional[datetime] = None
+    last_event_at: datetime | None = None
     is_compliant: bool = True
-    driving_remaining_minutes: Optional[float] = None
-    duty_window_remaining_minutes: Optional[float] = None
+    driving_remaining_minutes: float | None = None
+    duty_window_remaining_minutes: float | None = None
     break_required: bool = False
-    weekly_hours_used: Optional[float] = None
+    weekly_hours_used: float | None = None
     active_violation_count: int = 0
 
 
@@ -28,13 +28,13 @@ class DriverListItemResponse(BaseModel):
     """Driver row for the full historical + live picker."""
 
     driver_id: str
-    driver_name: Optional[str] = None
+    driver_name: str | None = None
     tenant_id: str
     is_live: bool = False
     event_count: int = 0
-    first_event_at: Optional[datetime] = None
-    last_event_at: Optional[datetime] = None
-    current_status: Optional[str] = None
+    first_event_at: datetime | None = None
+    last_event_at: datetime | None = None
+    current_status: str | None = None
 
 
 class DriverListResponse(BaseModel):
@@ -43,7 +43,7 @@ class DriverListResponse(BaseModel):
     tenant_id: str
     timezone: str
     total: int
-    drivers: List[DriverListItemResponse]
+    drivers: list[DriverListItemResponse]
 
 
 class DaySegmentAlertResponse(BaseModel):
@@ -77,13 +77,13 @@ class DayStatusEventResponse(BaseModel):
     distance_km: float = 0.0
     distance_label: str = ""
     origin: str = ""
-    annotation: Optional[str] = None
-    device_id: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    annotation: str | None = None
+    device_id: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     location_label: str = ""
     continued: bool = False
-    alerts: List[DaySegmentAlertResponse] = Field(default_factory=list)
+    alerts: list[DaySegmentAlertResponse] = Field(default_factory=list)
 
 
 class DurationTotalsResponse(BaseModel):
@@ -135,24 +135,24 @@ class AlertMarkerResponse(BaseModel):
     description: str = ""
     source: str = Field(..., description="backtest | live_audit")
     driver_id: str = ""
-    driver_name: Optional[str] = None
+    driver_name: str | None = None
 
 
 class DriverDayResponse(BaseModel):
     """HOS status grid payload for one driver / local calendar day."""
 
     driver_id: str
-    driver_name: Optional[str] = None
+    driver_name: str | None = None
     tenant_id: str
     date: date
     timezone: str
     day_start_utc: datetime
     day_end_utc: datetime
     is_live: bool = False
-    carry_forward_status: Optional[str] = None
-    events: List[DayStatusEventResponse]
+    carry_forward_status: str | None = None
+    events: list[DayStatusEventResponse]
     totals: DurationTotalsResponse
-    alert_markers: List[AlertMarkerResponse] = Field(default_factory=list)
+    alert_markers: list[AlertMarkerResponse] = Field(default_factory=list)
 
 
 class RouteSegmentResponse(BaseModel):
@@ -195,8 +195,8 @@ class DriverDayRouteMeta(BaseModel):
 class DriverDayRouteResponse(BaseModel):
     """GPS route trail + alert points for one driver / local calendar day."""
 
-    segments: List[RouteSegmentResponse] = Field(default_factory=list)
-    alerts: List[RouteAlertPointResponse] = Field(default_factory=list)
+    segments: list[RouteSegmentResponse] = Field(default_factory=list)
+    alerts: list[RouteAlertPointResponse] = Field(default_factory=list)
     meta: DriverDayRouteMeta
 
 
@@ -206,7 +206,7 @@ class AlertMarkersResponse(BaseModel):
     driver_id: str
     from_ts: datetime
     to_ts: datetime
-    markers: List[AlertMarkerResponse]
+    markers: list[AlertMarkerResponse]
 
 
 class HOSEventResponse(BaseModel):
@@ -215,11 +215,11 @@ class HOSEventResponse(BaseModel):
     raw_id: str
     status: str
     event_timestamp: datetime
-    device_id: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    odometer_km: Optional[float] = None
-    annotation: Optional[str] = None
+    device_id: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    odometer_km: float | None = None
+    annotation: str | None = None
     inputs_hash: str
 
 
@@ -229,7 +229,7 @@ class DriverTimelineResponse(BaseModel):
     driver_id: str
     tenant_id: str
     total_events: int
-    events: List[HOSEventResponse]
+    events: list[HOSEventResponse]
 
 
 class ViolationResponse(BaseModel):
@@ -256,7 +256,7 @@ class ComplianceSnapshotResponse(BaseModel):
     break_required: bool
     weekly_hours_used: float
     weekly_hours_remaining: float
-    violations: List[ViolationResponse] = Field(default_factory=list)
+    violations: list[ViolationResponse] = Field(default_factory=list)
 
 
 class AuditRecordResponse(BaseModel):
@@ -279,7 +279,7 @@ class PaginatedAuditResponse(BaseModel):
     total: int
     limit: int
     offset: int
-    records: List[AuditRecordResponse]
+    records: list[AuditRecordResponse]
 
 
 class HealthResponse(BaseModel):
@@ -315,8 +315,8 @@ class AlertClocksResponse(BaseModel):
     break_required: bool = False
     driving_since_break_h: float = 0.0
     consecutive_rest_h: float = 0.0
-    last_valid_restart_at: Optional[str] = None
-    last_valid_restart_at_local: Optional[str] = None
+    last_valid_restart_at: str | None = None
+    last_valid_restart_at_local: str | None = None
     had_34h_restart: bool = False
     weekly_window_mode: str = "rolling_window"
     weekly_window_subtitle: str = "rolling window"
@@ -341,7 +341,7 @@ class AlertDetailMeta(BaseModel):
     """Identity fields for an alert detail drawer."""
 
     driver_id: str
-    driver_name: Optional[str] = None
+    driver_name: str | None = None
     as_of: datetime
     local_time: str
     display_timezone: str
@@ -358,9 +358,9 @@ class AlertShiftWindowResponse(BaseModel):
     """Shift / weekly window used for the clocks that fired the alert."""
 
     label: str = ""
-    start_utc: Optional[str] = None
+    start_utc: str | None = None
     start_local: str = ""
-    end_utc: Optional[str] = None
+    end_utc: str | None = None
     end_local: str = ""
     note: str = ""
 
@@ -369,8 +369,8 @@ class AlertWeeklyRestartResponse(BaseModel):
     """34h restart applied-or-not context for the weekly clock."""
 
     had_restart: bool = False
-    restart_at_utc: Optional[str] = None
-    restart_at_local: Optional[str] = None
+    restart_at_utc: str | None = None
+    restart_at_local: str | None = None
     window_mode: str = "rolling_window"
     window_mode_label: str = "rolling window"
     weekly_window_start_local: str = ""
@@ -382,12 +382,12 @@ class AlertDetailResponse(BaseModel):
 
     meta: AlertDetailMeta
     clocks: AlertClocksResponse
-    explanation: List[AlertExplanationStep] = Field(default_factory=list)
+    explanation: list[AlertExplanationStep] = Field(default_factory=list)
     overage_seconds: float = 0.0
-    context_events: List[AlertContextEventResponse] = Field(default_factory=list)
-    context_window: Dict[str, Any] = Field(default_factory=dict)
-    shift_window: Optional[AlertShiftWindowResponse] = None
-    weekly_restart: Optional[AlertWeeklyRestartResponse] = None
+    context_events: list[AlertContextEventResponse] = Field(default_factory=list)
+    context_window: dict[str, Any] = Field(default_factory=dict)
+    shift_window: AlertShiftWindowResponse | None = None
+    weekly_restart: AlertWeeklyRestartResponse | None = None
     day_date: str = ""
 
 
@@ -398,7 +398,7 @@ class FleetAlertItemResponse(BaseModel):
     local_timestamp: str
     hour_of_day: float = 0.0
     driver_id: str
-    driver_name: Optional[str] = None
+    driver_name: str | None = None
     violation_type: str
     severity: str
     rule_ref: str = ""
@@ -412,23 +412,23 @@ class FleetAlertsResponse(BaseModel):
 
     total: int
     timezone: str
-    alerts: List[FleetAlertItemResponse]
+    alerts: list[FleetAlertItemResponse]
 
 
 class DriverPositionResponse(BaseModel):
     """Latest known lat/lon for a driver (from canonical HOS logs)."""
 
     driver_id: str
-    driver_name: Optional[str] = None
-    status: Optional[str] = None
+    driver_name: str | None = None
+    status: str | None = None
     latitude: float
     longitude: float
     event_timestamp: datetime
     is_live: bool = False
     warning_count: int = 0
     violation_count: int = 0
-    latest_alert_severity: Optional[str] = None
-    latest_alert_type: Optional[str] = None
+    latest_alert_severity: str | None = None
+    latest_alert_type: str | None = None
 
 
 class DriverPositionsResponse(BaseModel):
@@ -436,7 +436,7 @@ class DriverPositionsResponse(BaseModel):
 
     tenant_id: str
     total: int
-    positions: List[DriverPositionResponse]
+    positions: list[DriverPositionResponse]
 
 
 class RecentIngestionItemResponse(BaseModel):
@@ -445,12 +445,12 @@ class RecentIngestionItemResponse(BaseModel):
     ingested_at: datetime
     event_timestamp: datetime
     driver_id: str
-    driver_name: Optional[str] = None
+    driver_name: str | None = None
     status: str
-    device_id: Optional[str] = None
+    device_id: str | None = None
     raw_id: str
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 class RecentIngestionResponse(BaseModel):
@@ -458,23 +458,23 @@ class RecentIngestionResponse(BaseModel):
 
     tenant_id: str
     total: int
-    events: List[RecentIngestionItemResponse]
+    events: list[RecentIngestionItemResponse]
 
 
 class DispatchLogItemResponse(BaseModel):
     """One row from the compliance alerts JSONL dispatch log."""
 
-    timestamp: Optional[str] = None
+    timestamp: str | None = None
     driver_id: str = ""
-    driver_name: Optional[str] = None
+    driver_name: str | None = None
     severity: str = ""
     violation_type: str = ""
     channel: str = ""
     dispatch_action: str = ""
     suppressed: bool = False
     description: str = ""
-    voice_call_sid: Optional[str] = None
-    sms_sid: Optional[str] = None
+    voice_call_sid: str | None = None
+    sms_sid: str | None = None
 
 
 class DispatchLogResponse(BaseModel):
@@ -482,13 +482,13 @@ class DispatchLogResponse(BaseModel):
 
     total: int
     path: str
-    events: List[DispatchLogItemResponse]
+    events: list[DispatchLogItemResponse]
 
 
 class OpsLogItemResponse(BaseModel):
     """One row from the dcw.* ops JSONL event log."""
 
-    timestamp: Optional[str] = None
+    timestamp: str | None = None
     level: str = "INFO"
     logger: str = ""
     message: str = ""
@@ -500,4 +500,4 @@ class OpsLogResponse(BaseModel):
 
     total: int
     path: str
-    events: List[OpsLogItemResponse]
+    events: list[OpsLogItemResponse]

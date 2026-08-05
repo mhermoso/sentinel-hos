@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
 
 from app.core.config import settings
 from app.domains.notifier.schemas import ComplianceAlert
@@ -33,7 +32,7 @@ def _build_sms_body(alert: ComplianceAlert) -> str:
 async def send_sms_alert(
     alert: ComplianceAlert,
     to_phone: str,
-) -> Optional[str]:
+) -> str | None:
     """Send a Twilio SMS compliance alert to a dispatcher or driver."""
     if settings.ALERT_DRY_RUN:
         logger.info(

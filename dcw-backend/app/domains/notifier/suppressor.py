@@ -9,7 +9,6 @@ Implements the idempotency layer described in the architecture spec:
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from app.core.redis import alert_lock_key, get_redis
 
@@ -25,7 +24,7 @@ async def should_suppress_alert(
     shift_id: str,
     rule: str,
     stage: str,
-) -> tuple[bool, Optional[str]]:
+) -> tuple[bool, str | None]:
     """Check whether an alert should be suppressed.
 
     Returns:

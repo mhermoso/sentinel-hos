@@ -1,6 +1,8 @@
 import pytest
 from fastapi import HTTPException
+
 from app.core.billing import SaaSPlanTier, TenantSubscriptionContext, require_tier_capability
+
 
 @pytest.mark.asyncio
 async def test_starter_tier_blocks_voice_ivr():

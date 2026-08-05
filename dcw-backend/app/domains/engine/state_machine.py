@@ -14,9 +14,9 @@ or LLM scoring involved (per ADR-004).
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List, Optional, Sequence, Tuple
 
 from app.domains.engine.replay import RESTART_SECONDS, is_valid_restart_period
 from app.domains.engine.schemas import (
@@ -102,29 +102,29 @@ class _RestPeriod:
 class StateMachineResult:
     """Intermediate state produced by the state machine before rule evaluation."""
 
-    current_shift: Optional[ShiftWindow] = None
-    shifts: List[ShiftWindow] = field(default_factory=list)
+    current_shift: ShiftWindow | None = None
+    shifts: list[ShiftWindow] = field(default_factory=list)
     total_driving_seconds: float = 0.0
     total_duty_seconds: float = 0.0
-    duty_window_start: Optional[datetime] = None
+    duty_window_start: datetime | None = None
     duty_window_elapsed_seconds: float = 0.0
     driving_since_break_seconds: float = 0.0
     consecutive_rest_seconds: float = 0.0
-    last_qualifying_rest_end: Optional[datetime] = None
+    last_qualifying_rest_end: datetime | None = None
     had_34h_restart: bool = False
-    last_valid_restart_at: Optional[datetime] = None
-    current_status: Optional[str] = None
+    last_valid_restart_at: datetime | None = None
+    current_status: str | None = None
     is_currently_driving: bool = False
 
     # Split sleeper tracking
-    pending_sb_block: Optional[tuple[datetime, float]] = None  # legacy compat
+    pending_sb_block: tuple[datetime, float] | None = None  # legacy compat
     split_sleeper_active: bool = False
-    split_excluded_intervals: List[Tuple[datetime, datetime]] = field(default_factory=list)
+    split_excluded_intervals: list[tuple[datetime, datetime]] = field(default_factory=list)
 
 
 def build_timeline_from_logs(
-    logs: List[DriverTimeline.HOSEvent],
-) -> List[DriverTimeline.HOSEvent]:
+    logs: list[DriverTimeline.HOSEvent],
+) -> list[DriverTimeline.HOSEvent]:
     """Sort events chronologically and compute duration_seconds for each."""
     sorted_logs = sorted(logs, key=lambda e: e.timestamp)
     for i, event in enumerate(sorted_logs):
@@ -166,7 +166,7 @@ def _is_valid_split_pair(a: _RestPeriod, b: _RestPeriod) -> bool:
 def _excluded_seconds(
     window_start: datetime,
     as_of: datetime,
-    intervals: Sequence[Tuple[datetime, datetime]],
+    intervals: Sequence[tuple[datetime, datetime]],
 ) -> float:
     """Sum overlap of excluded intervals with [window_start, as_of]."""
     total = 0.0
@@ -182,7 +182,7 @@ def _recompute_clocks_from_segments(
     segments: Sequence[_Segment],
     *,
     rematch_anchor: datetime,
-    excluded: Sequence[Tuple[datetime, datetime]],
+    excluded: Sequence[tuple[datetime, datetime]],
 ) -> tuple[float, float, float]:
     """Recompute duty seconds, driving, and break accumulator after rematch.
 
@@ -250,18 +250,18 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
     events = build_timeline_from_logs(list(timeline.events))
     as_of = events[-1].timestamp
 
-    consecutive_rest_start: Optional[datetime] = None
+    consecutive_rest_start: datetime | None = None
     consecutive_rest_seconds: float = 0.0
     consecutive_sb_seconds: float = 0.0
     max_consecutive_sb_in_rest: float = 0.0
-    rest_block_start: Optional[datetime] = None
+    rest_block_start: datetime | None = None
 
     consecutive_non_driving_seconds: float = 0.0
 
-    shift_segments: List[_Segment] = []
-    pending_rest_periods: List[_RestPeriod] = []
-    excluded_intervals: List[Tuple[datetime, datetime]] = []
-    rematch_anchor: Optional[datetime] = None
+    shift_segments: list[_Segment] = []
+    pending_rest_periods: list[_RestPeriod] = []
+    excluded_intervals: list[tuple[datetime, datetime]] = []
+    rematch_anchor: datetime | None = None
 
     def _close_rest_period(end_ts: datetime) -> None:
         """Close the open rest block and attempt split-sleeper pairing (look-back)."""
@@ -288,7 +288,7 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
         )
 
         # Look-back: try to pair with an earlier unpaired period
-        paired_with: Optional[_RestPeriod] = None
+        paired_with: _RestPeriod | None = None
         for prior in pending_rest_periods:
             if prior.paired:
                 continue

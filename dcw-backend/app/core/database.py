@@ -33,7 +33,6 @@ async_session_factory = async_sessionmaker(
 class Base(DeclarativeBase):
     """Base class for all SQLAlchemy ORM models in the DCW system."""
 
-    pass
 
 
 async def get_session() -> AsyncSession:
@@ -52,7 +51,7 @@ async def get_session() -> AsyncSession:
 async def init_db() -> None:
     """Create all tables (development convenience — use Alembic in production)."""
     # Import ORM models so they register with Base.metadata before create_all.
-    import app.domains.engine.models  # noqa: F401
+    import app.domains.engine.models
     import app.domains.ingestion.models  # noqa: F401
 
     async with engine.begin() as conn:

@@ -7,8 +7,8 @@ remains ``settings.DEFAULT_HOME_TERMINAL_TIMEZONE``.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional, Union
+from datetime import UTC, datetime
+from typing import Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Request
@@ -59,7 +59,7 @@ def is_valid_timezone(name: str) -> bool:
         return False
 
 
-def zoneinfo_for(name: Optional[str] = None) -> ZoneInfo:
+def zoneinfo_for(name: str | None = None) -> ZoneInfo:
     tz_name = name or default_display_timezone()
     try:
         return ZoneInfo(tz_name)
@@ -70,7 +70,7 @@ def zoneinfo_for(name: Optional[str] = None) -> ZoneInfo:
 def resolve_display_timezone(
     request: Request,
     *,
-    tz_param: Optional[str] = None,
+    tz_param: str | None = None,
 ) -> str:
     """Resolve display TZ: query param → cookie → default Central."""
     if tz_param and is_valid_timezone(tz_param):
@@ -94,22 +94,22 @@ def set_display_timezone_cookie(response: Response, tz_name: str) -> None:
     )
 
 
-def tz_abbreviation(tz_name: str, at: Optional[object] = None) -> str:
+def tz_abbreviation(tz_name: str, at: object | None = None) -> str:
     """Return CST/CDT-style abbreviation for labels."""
     zone = zoneinfo_for(tz_name)
-    when = at if isinstance(at, datetime) else datetime.now(timezone.utc)
+    when = at if isinstance(at, datetime) else datetime.now(UTC)
     if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
+        when = when.replace(tzinfo=UTC)
     return when.astimezone(zone).tzname() or tz_name
 
 
 def ensure_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
-def parse_datetime(value: DateTimeLike) -> Optional[datetime]:
+def parse_datetime(value: DateTimeLike) -> datetime | None:
     """Parse API/DB datetime values (datetime or ISO string)."""
     if value is None:
         return None
@@ -124,7 +124,7 @@ def parse_datetime(value: DateTimeLike) -> Optional[datetime]:
         return None
 
 
-def to_display_datetime(value: DateTimeLike, tz_name: Optional[str] = None) -> Optional[datetime]:
+def to_display_datetime(value: DateTimeLike, tz_name: str | None = None) -> datetime | None:
     """Convert a UTC instant to the user's display timezone."""
     dt = parse_datetime(value)
     if dt is None:
@@ -134,7 +134,7 @@ def to_display_datetime(value: DateTimeLike, tz_name: Optional[str] = None) -> O
 
 def format_display_datetime(
     value: DateTimeLike,
-    tz_name: Optional[str] = None,
+    tz_name: str | None = None,
     *,
     fmt: str = "%Y-%m-%d %H:%M:%S",
     with_tz: bool = False,
@@ -152,7 +152,7 @@ def format_display_datetime(
 
 def format_display_date(
     value: DateTimeLike,
-    tz_name: Optional[str] = None,
+    tz_name: str | None = None,
 ) -> str:
     """Calendar date in the display timezone (``YYYY-MM-DD``)."""
     local = to_display_datetime(value, tz_name)
@@ -163,7 +163,7 @@ def format_display_date(
 
 def format_display_clock(
     value: DateTimeLike,
-    tz_name: Optional[str] = None,
+    tz_name: str | None = None,
 ) -> str:
     """Clock time in the display timezone (``HH:MM:SS``)."""
     return format_display_datetime(value, tz_name, fmt="%H:%M:%S")

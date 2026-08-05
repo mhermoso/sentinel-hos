@@ -18,7 +18,7 @@ import json
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from app.core.config import settings
 from app.core.redis import get_redis
@@ -34,7 +34,7 @@ _CANONICAL_CANDIDATES = (
 _DISPATCHES_PATH = _BACKEND_ROOT / "data" / "backtest_dispatches.json"
 
 # Process-local map used by sync ``resolve_driver_name`` (API request path).
-_RUNTIME_NAMES: Dict[str, str] = {}
+_RUNTIME_NAMES: dict[str, str] = {}
 
 
 def driver_names_key(tenant_id: str) -> str:
@@ -42,7 +42,7 @@ def driver_names_key(tenant_id: str) -> str:
     return f"hash:driver_names:{tenant_id}"
 
 
-async def save_driver_names_to_redis(tenant_id: str, names: Dict[str, str]) -> int:
+async def save_driver_names_to_redis(tenant_id: str, names: dict[str, str]) -> int:
     """Replace the tenant driver-name hash in Redis and warm the process cache."""
     global _RUNTIME_NAMES
     if not tenant_id or not names:
@@ -58,7 +58,7 @@ async def save_driver_names_to_redis(tenant_id: str, names: Dict[str, str]) -> i
     return len(names)
 
 
-async def load_driver_names_from_redis(tenant_id: str) -> Dict[str, str]:
+async def load_driver_names_from_redis(tenant_id: str) -> dict[str, str]:
     """Load the tenant driver-name hash from Redis (empty if missing)."""
     if not tenant_id:
         return {}
@@ -80,6 +80,8 @@ async def warm_driver_name_cache(*, geotab_api: Any | None = None) -> int:
     append-only HOS rows still have ``driver_name IS NULL``.
     """
     global _RUNTIME_NAMES
+    # Geotab-only: Samsara persists driver_name on canonical rows; do not merge
+    # Samsara names into the process-global _RUNTIME_NAMES cache.
     tenant_id = settings.GEOTAB_DATABASE or ""
     seed = load_driver_name_map()
     redis_names = await load_driver_names_from_redis(tenant_id)
@@ -102,9 +104,9 @@ async def warm_driver_name_cache(*, geotab_api: Any | None = None) -> int:
 
 
 @lru_cache(maxsize=1)
-def load_driver_name_map() -> Dict[str, str]:
+def load_driver_name_map() -> dict[str, str]:
     """Seed-file fallback for local/dev when Redis/Geotab are unavailable."""
-    names: Dict[str, str] = {}
+    names: dict[str, str] = {}
 
     for canonical_path in _CANONICAL_CANDIDATES:
         if not canonical_path.exists():
@@ -137,7 +139,7 @@ def load_driver_name_map() -> Dict[str, str]:
     return names
 
 
-def resolve_driver_name(driver_id: str, db_name: Optional[str] = None) -> Optional[str]:
+def resolve_driver_name(driver_id: str, db_name: str | None = None) -> str | None:
     """Return a display name for ``driver_id`` (db → runtime cache → seed JSON)."""
     if db_name:
         return db_name

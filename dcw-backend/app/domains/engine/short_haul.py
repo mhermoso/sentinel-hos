@@ -6,10 +6,10 @@ never queries PostgreSQL (ADR-007 store stays behind the repository boundary).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from app.domains.engine.geo import (
@@ -54,7 +54,7 @@ class ExemptionAssessment:
     """Result of day-level short-haul condition checks."""
 
     ok: bool
-    reason: Optional[ExemptionFailReason] = None
+    reason: ExemptionFailReason | None = None
     detail: str = ""
     max_radius_air_miles: float = 0.0
     release_limit_seconds: float = CDL_RELEASE_LIMIT_SECONDS
@@ -126,8 +126,7 @@ def assess_short_haul_exemption(
     max_radius = 0.0
     for fix in window_fixes:
         dist = distance_from_origin_air_miles(origin, fix.latitude, fix.longitude)
-        if dist > max_radius:
-            max_radius = dist
+        max_radius = max(max_radius, dist)
         if dist > SHORT_HAUL_RADIUS_AIR_MILES:
             return ExemptionAssessment(
                 ok=False,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -24,7 +24,7 @@ def _env() -> Environment:
 
 def test_logs_feed_renders_rows_and_services() -> None:
     row = LogFeedRow(
-        timestamp=datetime(2026, 7, 31, 2, 30, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 7, 31, 2, 30, tzinfo=UTC),
         source="ingestion",
         level="INFO",
         driver_id="b382",

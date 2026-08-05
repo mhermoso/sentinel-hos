@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Dict
-
 import mygeotab
 
 
-def build_geotab_driver_name_map(api: mygeotab.API) -> Dict[str, str]:
+def build_geotab_driver_name_map(api: mygeotab.API) -> dict[str, str]:
     """Fetch MyGeotab ``User`` records and map id → full name."""
     users = api.get("User")
-    name_map: Dict[str, str] = {}
+    name_map: dict[str, str] = {}
     for user in users:
         uid = user.get("id")
         if not uid:

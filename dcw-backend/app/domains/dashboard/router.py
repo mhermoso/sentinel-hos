@@ -25,7 +25,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +54,7 @@ from app.domains.dashboard.day_builder import (
     merge_alert_markers,
 )
 from app.domains.dashboard.driver_names import resolve_driver_name
+from app.domains.dashboard.fleet_select import resolve_fleet
 from app.domains.dashboard.route_builder import build_day_route_payload
 from app.domains.dashboard.schemas import (
     AlertDetailResponse,
@@ -99,10 +100,17 @@ router = APIRouter(prefix="/api", tags=["dashboard"])
 # ── Shared helpers (also used by UI routes) ───────────────────────────────
 
 
-async def _list_all_drivers(session: AsyncSession) -> list[DriverListItemResponse]:
+def _is_geotab_tenant(tenant_id: str) -> bool:
+    """Backtest dispatches are Geotab-scoped only."""
+    return bool(settings.GEOTAB_DATABASE) and tenant_id == settings.GEOTAB_DATABASE
+
+
+async def _list_all_drivers(
+    session: AsyncSession,
+    tenant_id: str,
+) -> list[DriverListItemResponse]:
     """Union of distinct PG drivers + Redis active set."""
-    tenant_id = settings.GEOTAB_DATABASE
-    active_ids = set(await IngestionRepository.get_active_driver_ids())
+    active_ids = set(await IngestionRepository.get_active_driver_ids(tenant_id))
 
     stmt = (
         select(
@@ -172,9 +180,9 @@ async def _fetch_driver_events_for_day(
     session: AsyncSession,
     driver_id: str,
     day_end_utc: datetime,
+    tenant_id: str,
 ) -> tuple[list[CanonicalHOSLogRecord], str | None]:
     """All events up to day end (needed for midnight carry-forward)."""
-    tenant_id = settings.GEOTAB_DATABASE
     stmt = (
         select(CanonicalHOSLogRecord)
         .where(
@@ -211,8 +219,8 @@ async def _live_audit_markers(
     driver_id: str,
     start_utc: datetime,
     end_utc: datetime,
+    tenant_id: str,
 ) -> list[dict]:
-    tenant_id = settings.GEOTAB_DATABASE
     stmt = (
         select(AuditRecord)
         .where(
@@ -239,10 +247,10 @@ async def _fleet_live_audit_markers(
     session: AsyncSession,
     start_utc: datetime | None,
     end_utc: datetime | None,
+    tenant_id: str,
     driver_id: str | None = None,
 ) -> list[dict]:
     """Collect live audit violations across drivers for the Alerts tab."""
-    tenant_id = settings.GEOTAB_DATABASE
     stmt = select(AuditRecord).where(AuditRecord.tenant_id == tenant_id)
     if driver_id:
         stmt = stmt.where(AuditRecord.driver_id == driver_id)
@@ -285,23 +293,24 @@ async def _build_driver_day(
     session: AsyncSession,
     driver_id: str,
     local_date: date,
+    tenant_id: str,
     display_tz: str | None = None,
 ) -> DriverDayResponse:
     tz_name = display_tz or default_display_timezone()
     bounds = chicago_day_bounds(local_date, zoneinfo_for(tz_name))
     records, driver_name = await _fetch_driver_events_for_day(
-        session, driver_id, bounds.end_utc
+        session, driver_id, bounds.end_utc, tenant_id
     )
     if not records:
         # Still allow empty day if driver exists in active set / name known
-        active_ids = set(await IngestionRepository.get_active_driver_ids())
+        active_ids = set(await IngestionRepository.get_active_driver_ids(tenant_id))
         if driver_id not in active_ids:
             # Check any history at all
             exists_stmt = (
                 select(func.count())
                 .select_from(CanonicalHOSLogRecord)
                 .where(
-                    CanonicalHOSLogRecord.tenant_id == settings.GEOTAB_DATABASE,
+                    CanonicalHOSLogRecord.tenant_id == tenant_id,
                     CanonicalHOSLogRecord.driver_id == driver_id,
                 )
             )
@@ -364,25 +373,28 @@ async def _build_driver_day(
         exemption_ym_mi=round(totals_seconds.get("exemption_ym_m", 0.0) / METERS_PER_MILE, 2),
     )
 
+    backtest_rows = await load_backtest_dispatches() if _is_geotab_tenant(tenant_id) else []
     backtest = filter_backtest_markers(
-        await load_backtest_dispatches(),
+        backtest_rows,
         driver_id,
         bounds.start_utc,
         bounds.end_utc,
     )
-    live = await _live_audit_markers(session, driver_id, bounds.start_utc, bounds.end_utc)
+    live = await _live_audit_markers(
+        session, driver_id, bounds.start_utc, bounds.end_utc, tenant_id
+    )
     markers = annotate_marker_hours(
         merge_alert_markers(backtest, live),
         bounds.timezone,
     )
     attach_alerts_to_segments(grid_events, markers)
 
-    active_ids = set(await IngestionRepository.get_active_driver_ids())
+    active_ids = set(await IngestionRepository.get_active_driver_ids(tenant_id))
 
     return DriverDayResponse(
         driver_id=driver_id,
         driver_name=driver_name,
-        tenant_id=settings.GEOTAB_DATABASE,
+        tenant_id=tenant_id,
         date=local_date,
         timezone=bounds.timezone,
         day_start_utc=bounds.start_utc,
@@ -435,12 +447,15 @@ async def health_check(
 
 @router.get("/drivers", response_model=DriverListResponse)
 async def list_drivers(
+    request: Request,
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> DriverListResponse:
     """Return all drivers with historical HOS logs and/or live Redis presence."""
-    drivers = await _list_all_drivers(session)
+    active = await resolve_fleet(request, fleet_param=fleet)
+    drivers = await _list_all_drivers(session, active.fleet_id)
     return DriverListResponse(
-        tenant_id=settings.GEOTAB_DATABASE,
+        tenant_id=active.fleet_id,
         timezone=settings.DEFAULT_HOME_TERMINAL_TIMEZONE,
         total=len(drivers),
         drivers=drivers,
@@ -489,6 +504,8 @@ def _alert_stats_by_driver(
 
 @router.get("/drivers/positions", response_model=DriverPositionsResponse)
 async def get_driver_positions(
+    request: Request,
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> DriverPositionsResponse:
     """Latest non-null lat/lon per driver from canonical HOS logs.
@@ -496,8 +513,9 @@ async def get_driver_positions(
     Includes last-30-day warning/violation counts and latest alert fields
     (same window as Home summary / fleet alerts).
     """
-    tenant_id = settings.GEOTAB_DATABASE
-    active_ids = set(await IngestionRepository.get_active_driver_ids())
+    active = await resolve_fleet(request, fleet_param=fleet)
+    tenant_id = active.fleet_id
+    active_ids = set(await IngestionRepository.get_active_driver_ids(tenant_id))
 
     # PostgreSQL DISTINCT ON: newest event with coordinates per driver
     stmt = (
@@ -517,8 +535,10 @@ async def get_driver_positions(
     records = list(result.scalars().all())
 
     start, end = default_alerts_utc_window(default_display_timezone())
-    live = await _fleet_live_audit_markers(session, start, end, driver_id=None)
-    backtest = await load_backtest_dispatches()
+    live = await _fleet_live_audit_markers(
+        session, start, end, tenant_id, driver_id=None
+    )
+    backtest = await load_backtest_dispatches() if _is_geotab_tenant(tenant_id) else []
     merged = collect_fleet_alerts(
         backtest,
         live,
@@ -556,11 +576,14 @@ async def get_driver_positions(
 
 @router.get("/ingestion/recent", response_model=RecentIngestionResponse)
 async def get_recent_ingestion(
+    request: Request,
     limit: int = Query(default=20, ge=1, le=100),
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> RecentIngestionResponse:
-    """Newest canonical HOS logs by ingested_at (Geotab arrival feed)."""
-    tenant_id = settings.GEOTAB_DATABASE
+    """Newest canonical HOS logs by ingested_at for the active fleet."""
+    active = await resolve_fleet(request, fleet_param=fleet)
+    tenant_id = active.fleet_id
     stmt = (
         select(CanonicalHOSLogRecord)
         .where(CanonicalHOSLogRecord.tenant_id == tenant_id)
@@ -595,6 +618,8 @@ async def get_recent_ingestion(
 
 @router.get("/drivers/active", response_model=list[DriverStatusResponse])
 async def get_active_drivers(
+    request: Request,
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> list[DriverStatusResponse]:
     """Return live status for all currently active drivers.
@@ -602,8 +627,9 @@ async def get_active_drivers(
     Reads driver IDs from Redis set, then fetches latest event and audit
     record from PostgreSQL for each driver.
     """
-    tenant_id = settings.GEOTAB_DATABASE
-    driver_ids = await IngestionRepository.get_active_driver_ids()
+    active = await resolve_fleet(request, fleet_param=fleet)
+    tenant_id = active.fleet_id
+    driver_ids = await IngestionRepository.get_active_driver_ids(tenant_id)
 
     if not driver_ids:
         return []
@@ -664,6 +690,7 @@ async def get_active_drivers(
 
 @router.get("/alerts", response_model=FleetAlertsResponse)
 async def list_fleet_alerts(
+    request: Request,
     severity: str | None = Query(
         default=None,
         description="WARNING | VIOLATION (empty / all = no filter)",
@@ -675,13 +702,17 @@ async def list_fleet_alerts(
         default=None, description="backtest | live_audit (empty / all = both)"
     ),
     tz: str | None = Query(default=None),
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> FleetAlertsResponse:
     """Fleet alerts: merged backtest dispatches + recent live audit violations.
 
     Empty ``source`` / ``severity`` (and literal ``all``) mean no filter.
     When both ``from`` and ``to`` are omitted, defaults to the last 30 local days.
+    Backtest markers are included only for the Geotab fleet.
     """
+    active = await resolve_fleet(request, fleet_param=fleet)
+    tenant_id = active.fleet_id
     display_tz = tz or default_display_timezone()
     severity = normalize_filter_str(severity)
     source = normalize_filter_str(source)
@@ -698,9 +729,16 @@ async def list_fleet_alerts(
 
     live: list[dict] = []
     if source is None or source.lower() == "live_audit":
-        live = await _fleet_live_audit_markers(session, start, end, driver_id=driver_id)
+        live = await _fleet_live_audit_markers(
+            session, start, end, tenant_id, driver_id=driver_id
+        )
 
-    backtest = await load_backtest_dispatches() if (source is None or source.lower() == "backtest") else []
+    want_backtest = source is None or source.lower() == "backtest"
+    backtest = (
+        await load_backtest_dispatches()
+        if want_backtest and _is_geotab_tenant(tenant_id)
+        else []
+    )
     merged = collect_fleet_alerts(
         backtest,
         live,
@@ -817,6 +855,7 @@ async def get_ops_log(
 
 @router.get("/drivers/{driver_id}/day", response_model=DriverDayResponse)
 async def get_driver_day(
+    request: Request,
     driver_id: str,
     date_str: str | None = Query(
         default=None,
@@ -827,9 +866,11 @@ async def get_driver_day(
         default=None,
         description="Display IANA timezone (default America/Chicago)",
     ),
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> DriverDayResponse:
     """Return HOS status events, duration totals, and alert markers for one day."""
+    active = await resolve_fleet(request, fleet_param=fleet)
     display_tz = tz if tz else default_display_timezone()
     if date_str:
         try:
@@ -842,11 +883,14 @@ async def get_driver_day(
     else:
         local_date = datetime.now(zoneinfo_for(display_tz)).date()
 
-    return await _build_driver_day(session, driver_id, local_date, display_tz=display_tz)
+    return await _build_driver_day(
+        session, driver_id, local_date, active.fleet_id, display_tz=display_tz
+    )
 
 
 @router.get("/drivers/{driver_id}/day/route", response_model=DriverDayRouteResponse)
 async def get_driver_day_route(
+    request: Request,
     driver_id: str,
     date_str: str | None = Query(
         default=None,
@@ -857,9 +901,12 @@ async def get_driver_day_route(
         default=None,
         description="Display IANA timezone (default America/Chicago)",
     ),
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> DriverDayRouteResponse:
     """Return status-colored GPS route segments + alert points for one day."""
+    active = await resolve_fleet(request, fleet_param=fleet)
+    tenant_id = active.fleet_id
     display_tz = tz if tz else default_display_timezone()
     if date_str:
         try:
@@ -872,10 +919,12 @@ async def get_driver_day_route(
     else:
         local_date = datetime.now(zoneinfo_for(display_tz)).date()
 
-    day = await _build_driver_day(session, driver_id, local_date, display_tz=display_tz)
+    day = await _build_driver_day(
+        session, driver_id, local_date, tenant_id, display_tz=display_tz
+    )
     repo = IngestionRepository(session)
     crumbs = await repo.get_gps_breadcrumbs_for_driver_day_route(
-        tenant_id=settings.GEOTAB_DATABASE,
+        tenant_id=tenant_id,
         driver_id=driver_id,
         start_utc=day.day_start_utc,
         end_utc=day.day_end_utc,
@@ -912,6 +961,7 @@ async def get_driver_day_route(
 
 @router.get("/drivers/{driver_id}/alerts/detail", response_model=AlertDetailResponse)
 async def get_alert_detail(
+    request: Request,
     driver_id: str,
     as_of: datetime = Query(..., description="Alert timestamp (UTC or offset)"),
     violation_type: str = Query(..., description="Violation type enum value"),
@@ -920,16 +970,18 @@ async def get_alert_detail(
     description: str = Query(default="", description="Original marker description"),
     severity: str = Query(default="", description="Original marker severity"),
     rule_ref: str = Query(default="", description="Original marker rule ref"),
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> AlertDetailResponse:
     """Recompute compliance at ``as_of`` and return calculation detail + graph context."""
+    active = await resolve_fleet(request, fleet_param=fleet)
+    tenant_id = active.fleet_id
     display_tz = tz or default_display_timezone()
     if as_of.tzinfo is None:
         as_of = as_of.replace(tzinfo=UTC)
     else:
         as_of = as_of.astimezone(UTC)
 
-    tenant_id = settings.GEOTAB_DATABASE
     lookback = settings.WEEKLY_CYCLE_DAYS + 3
     cutoff = as_of - timedelta(days=lookback)
     stmt = (
@@ -973,13 +1025,17 @@ async def get_alert_detail(
 
 @router.get("/drivers/{driver_id}/alert-markers", response_model=AlertMarkersResponse)
 async def get_driver_alert_markers(
+    request: Request,
     driver_id: str,
     from_ts: datetime = Query(..., alias="from", description="UTC window start"),
     to_ts: datetime = Query(..., alias="to", description="UTC window end (exclusive)"),
     tz: str | None = Query(default=None, description="Display IANA timezone"),
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> AlertMarkersResponse:
     """Merge backtest would-dispatch markers with live audit violations."""
+    active = await resolve_fleet(request, fleet_param=fleet)
+    tenant_id = active.fleet_id
     if from_ts.tzinfo is None:
         from_ts = from_ts.replace(tzinfo=UTC)
     else:
@@ -990,13 +1046,14 @@ async def get_driver_alert_markers(
         to_ts = to_ts.astimezone(UTC)
 
     display_tz = tz or default_display_timezone()
+    backtest_rows = await load_backtest_dispatches() if _is_geotab_tenant(tenant_id) else []
     backtest = filter_backtest_markers(
-        await load_backtest_dispatches(),
+        backtest_rows,
         driver_id,
         from_ts,
         to_ts,
     )
-    live = await _live_audit_markers(session, driver_id, from_ts, to_ts)
+    live = await _live_audit_markers(session, driver_id, from_ts, to_ts, tenant_id)
     markers = annotate_marker_hours(
         merge_alert_markers(backtest, live),
         display_tz,
@@ -1014,12 +1071,15 @@ async def get_driver_alert_markers(
 
 @router.get("/drivers/{driver_id}/timeline", response_model=DriverTimelineResponse)
 async def get_driver_timeline(
+    request: Request,
     driver_id: str,
     limit: int = Query(default=200, le=1000, description="Max events to return"),
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> DriverTimelineResponse:
     """Return a driver's historical HOS event timeline from PostgreSQL."""
-    tenant_id = settings.GEOTAB_DATABASE
+    active = await resolve_fleet(request, fleet_param=fleet)
+    tenant_id = active.fleet_id
 
     stmt = (
         select(CanonicalHOSLogRecord)
@@ -1067,11 +1127,14 @@ async def get_driver_timeline(
 
 @router.get("/drivers/{driver_id}/compliance", response_model=ComplianceSnapshotResponse)
 async def get_driver_compliance(
+    request: Request,
     driver_id: str,
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> ComplianceSnapshotResponse:
     """Return the latest compliance evaluation result for a driver."""
-    tenant_id = settings.GEOTAB_DATABASE
+    active = await resolve_fleet(request, fleet_param=fleet)
+    tenant_id = active.fleet_id
     engine_repo = EngineRepository(session)
 
     audit = await engine_repo.get_latest_audit_record(tenant_id, driver_id)
@@ -1105,13 +1168,16 @@ async def get_driver_compliance(
 
 @router.get("/audit/records", response_model=PaginatedAuditResponse)
 async def list_audit_records(
+    request: Request,
     driver_id: str = Query(None, description="Filter by driver ID"),
     limit: int = Query(default=50, le=500),
     offset: int = Query(default=0, ge=0),
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
     session: AsyncSession = Depends(get_session),
 ) -> PaginatedAuditResponse:
     """Return a paginated list of compliance audit records."""
-    tenant_id = settings.GEOTAB_DATABASE
+    active = await resolve_fleet(request, fleet_param=fleet)
+    tenant_id = active.fleet_id
 
     base_query = select(AuditRecord).where(AuditRecord.tenant_id == tenant_id)
     count_query = select(func.count()).select_from(AuditRecord).where(

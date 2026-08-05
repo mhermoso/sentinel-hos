@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
-from typing import Optional, Sequence
+from collections.abc import Sequence
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,11 +50,11 @@ class DriverDayClocks(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     clocks: dict[str, ClockGauge]
-    shift_start_utc: Optional[datetime] = None
-    shift_start_local: Optional[str] = None
+    shift_start_utc: datetime | None = None
+    shift_start_local: str | None = None
     had_34h_restart: bool = False
-    last_valid_restart_utc: Optional[datetime] = None
-    last_valid_restart_local: Optional[str] = None
+    last_valid_restart_utc: datetime | None = None
+    last_valid_restart_local: str | None = None
     break_required: bool = False
     is_compliant: bool = True
     evaluated_at: datetime
@@ -68,8 +68,8 @@ class DriverClockCard(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     driver_id: str
-    driver_name: Optional[str] = None
-    status: Optional[str] = None
+    driver_name: str | None = None
+    status: str | None = None
     is_compliant: bool = True
     break_required: bool = False
     evaluated_at: datetime
@@ -85,8 +85,8 @@ def _hours(seconds: float) -> float:
 
 def _ensure_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _local_label(dt: datetime, tz: ZoneInfo) -> str:
@@ -101,7 +101,7 @@ def day_view_as_of(local_date: date, display_tz: str) -> datetime:
     today = datetime.now(tz).date()
     if local_date < today:
         return day_end
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return min(now, day_end)
 
 

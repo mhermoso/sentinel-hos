@@ -23,7 +23,7 @@ Components inside each app:
 - **api** (service) — Docker build from `dcw-backend/Containerfile`, `source_dir: dcw-backend`,
   port 8000, health check `GET /health`, receives all ingress traffic.
 - **worker** (worker) — same image, `run_command: arq app.domains.ingestion.poller.WorkerSettings`.
-  Runs the Geotab pollers and the compliance sweeper; must be always-on (ARQ cron).
+  Runs Geotab/Samsara pollers and the compliance sweeper; must be always-on (ARQ cron).
 
 ## Deployment flow
 
@@ -54,8 +54,8 @@ config (`commit.gpgsign=true`, `gpg.format=ssh`).
    section (`cluster_name`), keeping `DATABASE_URL=${db.DATABASE_URL}` and
    `REDIS_URL=${redis.DATABASE_URL}` bindable references.
 4. **Secrets** — set as encrypted env vars (type `SECRET`): `SECRET_KEY` (fresh per
-   environment), `GEOTAB_USERNAME`/`GEOTAB_PASSWORD`, `TWILIO_*`. Never reuse the dev
-   `SECRET_KEY` in prod.
+   environment), `GEOTAB_USERNAME`/`GEOTAB_PASSWORD`, `SAMSARA_API_TOKEN` (when Fleet B
+   is enabled), `TWILIO_*`. Never reuse the dev `SECRET_KEY` in prod.
 5. **Firewall** — after the app exists, restrict each cluster's trusted sources to
    that app only (Databases → Settings → Trusted Sources, or `db-cluster-update-firewall-rules`
    with `type: app`).
@@ -83,6 +83,11 @@ config (`commit.gpgsign=true`, `gpg.format=ssh`).
 | `SECRET_KEY` | Secret, unique per environment |
 | `ALERT_DRY_RUN` | `true` in dev/staging; `false` in prod |
 | `GEOTAB_SERVER` / `GEOTAB_DATABASE` / `GEOTAB_USERNAME` / `GEOTAB_PASSWORD` | Geotab feed credentials (username/password are secrets) |
+| `SAMSARA_API_TOKEN` | Secret — Samsara Bearer token (Read ELD Compliance; Read Vehicle Statistics for GPS) |
+| `SAMSARA_FLEET_ID` | Optional stable fleet/tenant id (`samsara:{org_id}`); derived from `/me` on connect when empty |
+| `SAMSARA_API_BASE` | Regional API base (default `https://api.samsara.com`) |
+| `SAMSARA_HISTORY_BACKFILL_DAYS` | One-shot HOS lookback on worker startup (default `10`) |
+| `SAMSARA_RESCAN_HOURS` | Rolling re-fetch window per HOS poll for late Driver App uploads (default `24`) |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_API_KEY_SID` / `TWILIO_API_KEY_SECRET` / `TWILIO_FROM_PHONE_NUMBER` | Telephony (secrets) |
 | `DEFAULT_HOME_TERMINAL_TIMEZONE` | e.g. `America/Chicago` |
 

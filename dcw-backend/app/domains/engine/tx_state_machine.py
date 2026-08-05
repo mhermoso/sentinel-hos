@@ -11,9 +11,9 @@ Differences from federal Ruleset A:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List, Optional, Sequence, Tuple
 
 from app.domains.engine.replay import RESTART_SECONDS
 from app.domains.engine.schemas import DriverTimeline, ShiftWindow
@@ -72,23 +72,23 @@ class _SbPeriod:
 class TxStateMachineResult:
     """Intermediate TX clocks before rule evaluation."""
 
-    current_shift: Optional[ShiftWindow] = None
-    shifts: List[ShiftWindow] = field(default_factory=list)
+    current_shift: ShiftWindow | None = None
+    shifts: list[ShiftWindow] = field(default_factory=list)
     total_driving_seconds: float = 0.0
     total_duty_seconds: float = 0.0
     # Wall-clock tour start for Ruleset D 12h release (first ON/D/YM after 8h).
-    duty_window_start: Optional[datetime] = None
+    duty_window_start: datetime | None = None
     duty_window_elapsed_seconds: float = 0.0
     # Accumulated ON+D+YM since last 8h reset / split rematch.
     accumulated_duty_seconds: float = 0.0
     consecutive_rest_seconds: float = 0.0
-    last_qualifying_rest_end: Optional[datetime] = None
+    last_qualifying_rest_end: datetime | None = None
     had_34h_restart: bool = False
-    last_valid_restart_at: Optional[datetime] = None
-    current_status: Optional[str] = None
+    last_valid_restart_at: datetime | None = None
+    current_status: str | None = None
     is_currently_driving: bool = False
     split_sleeper_active: bool = False
-    split_excluded_intervals: List[Tuple[datetime, datetime]] = field(default_factory=list)
+    split_excluded_intervals: list[tuple[datetime, datetime]] = field(default_factory=list)
 
 
 def _recompute_from_segments(
@@ -116,7 +116,7 @@ def _driving_around_period(
     segments: Sequence[_Segment],
     period: _SbPeriod,
     *,
-    until: Optional[datetime] = None,
+    until: datetime | None = None,
 ) -> float:
     """Driving immediately before + after a sleeper period (split validity)."""
     before = 0.0
@@ -140,7 +140,7 @@ def _duty_around_period(
     segments: Sequence[_Segment],
     period: _SbPeriod,
     *,
-    until: Optional[datetime] = None,
+    until: datetime | None = None,
 ) -> float:
     """Accumulated ON+D+YM immediately before + after a sleeper period."""
     total = 0.0
@@ -196,14 +196,14 @@ def run_tx_state_machine(timeline: DriverTimeline) -> TxStateMachineResult:
     events = build_timeline_from_logs(list(timeline.events))
     as_of = events[-1].timestamp
 
-    consecutive_rest_start: Optional[datetime] = None
+    consecutive_rest_start: datetime | None = None
     consecutive_rest_seconds: float = 0.0
     consecutive_sb_seconds: float = 0.0
-    sb_block_start: Optional[datetime] = None
+    sb_block_start: datetime | None = None
 
-    shift_segments: List[_Segment] = []
-    pending_sb: List[_SbPeriod] = []
-    rematch_anchor: Optional[datetime] = None
+    shift_segments: list[_Segment] = []
+    pending_sb: list[_SbPeriod] = []
+    rematch_anchor: datetime | None = None
 
     def _try_close_sb_period(end_ts: datetime) -> None:
         nonlocal rematch_anchor, pending_sb, shift_segments
@@ -223,7 +223,7 @@ def run_tx_state_machine(timeline: DriverTimeline) -> TxStateMachineResult:
             end=end_ts,
             duration=consecutive_sb_seconds,
         )
-        paired_with: Optional[_SbPeriod] = None
+        paired_with: _SbPeriod | None = None
         for prior in pending_sb:
             if prior.paired:
                 continue

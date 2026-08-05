@@ -7,7 +7,6 @@ by the ingestion poller, compliance sweeper, and notifier subscriber.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
 
 import redis.asyncio as aioredis
 
@@ -16,7 +15,7 @@ from app.core.config import settings
 logger = logging.getLogger("dcw.redis")
 
 # Module-level client — initialised via ``init_redis()``
-_redis_client: Optional[aioredis.Redis] = None
+_redis_client: aioredis.Redis | None = None
 
 
 async def init_redis() -> aioredis.Redis:
@@ -68,9 +67,36 @@ def cursor_key(provider: str, tenant_id: str) -> str:
     return f"cursor:{provider}:{tenant_id}"
 
 
-def active_drivers_key() -> str:
-    """Redis SET key holding driver IDs with recent activity."""
-    return "set:active_drivers"
+def active_drivers_key(fleet_id: str) -> str:
+    """Redis SET key holding driver IDs with recent activity for one fleet."""
+    return f"set:active_drivers:{fleet_id}"
+
+
+LEGACY_ACTIVE_DRIVERS_KEY = "set:active_drivers"
+
+
+async def migrate_legacy_active_drivers(geotab_fleet_id: str) -> None:
+    """One-time migration of the global active-drivers set to the Geotab fleet key.
+
+    Before fleet namespacing, all active drivers lived in a single
+    ``set:active_drivers`` key. Merge it into the per-fleet key and delete the
+    legacy key; the exists-check makes this a run-once operation.
+    """
+    client = await get_redis()
+    if not await client.exists(LEGACY_ACTIVE_DRIVERS_KEY):
+        return
+    target_key = active_drivers_key(geotab_fleet_id)
+    merged = await client.sunionstore(  # type: ignore[misc]
+        target_key, [target_key, LEGACY_ACTIVE_DRIVERS_KEY]
+    )
+    await client.delete(LEGACY_ACTIVE_DRIVERS_KEY)
+    await client.expire(target_key, 86400)
+    logger.info(
+        "Migrated legacy %s into %s (%d driver(s))",
+        LEGACY_ACTIVE_DRIVERS_KEY,
+        target_key,
+        merged,
+    )
 
 
 def alert_lock_key(

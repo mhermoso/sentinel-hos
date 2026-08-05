@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import List
 
 from app.core.config import settings
 from app.domains.engine.schemas import (
@@ -60,7 +59,7 @@ def check_driving_limit(
     now: datetime,
     *,
     max_driving_seconds: float = MAX_DRIVING_SECONDS,
-) -> tuple[float, List[Violation]]:
+) -> tuple[float, list[Violation]]:
     """§ 395.3(a)(3)(i) — Maximum driving after 10h off-duty (default 11h).
 
     ``max_driving_seconds`` may be raised for adverse driving (§ 395.1(b) → 13h).
@@ -71,7 +70,7 @@ def check_driving_limit(
     driven = state.current_shift.cumulative_driving_seconds if state.current_shift else 0.0
     limit_h = max_driving_seconds / 3600.0
     remaining = max(0.0, max_driving_seconds - driven)
-    violations: List[Violation] = []
+    violations: list[Violation] = []
 
     if driven >= max_driving_seconds:
         overage = driven - max_driving_seconds
@@ -113,7 +112,7 @@ def check_duty_window(
     now: datetime,
     *,
     max_duty_window_seconds: float = MAX_DUTY_WINDOW_SECONDS,
-) -> tuple[float, List[Violation]]:
+) -> tuple[float, list[Violation]]:
     """§ 395.3(a)(2) — Duty window from first on-duty moment (default 14h).
 
     ``max_duty_window_seconds`` may be raised for adverse (§ 395.1(b)) or
@@ -128,7 +127,7 @@ def check_duty_window(
     elapsed = state.duty_window_elapsed_seconds
     limit_h = max_duty_window_seconds / 3600.0
     remaining = max(0.0, max_duty_window_seconds - elapsed)
-    violations: List[Violation] = []
+    violations: list[Violation] = []
     driving = state.is_currently_driving
 
     if elapsed >= max_duty_window_seconds and driving:
@@ -168,7 +167,7 @@ def check_duty_window(
 def check_rest_break(
     state: StateMachineResult,
     now: datetime,
-) -> tuple[bool, List[Violation]]:
+) -> tuple[bool, list[Violation]]:
     """§ 395.3(a)(3)(ii) — 30-min break required after 8 cumulative driving hours.
 
     VIOLATION only when the accumulator ≥ 8h **and** the driver is currently Driving.
@@ -180,7 +179,7 @@ def check_rest_break(
     """
     driving_since_break = state.driving_since_break_seconds
     break_required = driving_since_break >= MAX_DRIVING_BEFORE_BREAK_SECONDS
-    violations: List[Violation] = []
+    violations: list[Violation] = []
     driving = state.is_currently_driving
 
     if break_required and driving:
@@ -223,7 +222,7 @@ def check_rest_break(
 def check_weekly_cycle(
     weekly_duty_seconds: float,
     now: datetime,
-) -> tuple[float, float, List[Violation]]:
+) -> tuple[float, float, list[Violation]]:
     """§ 395.3(b) — 60/70-hour rolling weekly cycle.
 
     Uses settings.WEEKLY_CYCLE_LIMIT_HOURS (default 70h for 8-day cycle).
@@ -236,7 +235,7 @@ def check_weekly_cycle(
     limit_seconds = settings.WEEKLY_CYCLE_LIMIT_HOURS * 3600.0
     hours_used = weekly_duty_seconds / 3600.0
     hours_remaining = max(0.0, (limit_seconds - weekly_duty_seconds) / 3600.0)
-    violations: List[Violation] = []
+    violations: list[Violation] = []
     # used ≥ 90% ⇔ remaining ≤ 10% (compare on used side to avoid 1.0-0.9 float drift)
     warn_used_seconds = limit_seconds * WEEKLY_WARNING_USED_FRACTION
 
@@ -278,7 +277,7 @@ def check_weekly_cycle(
 def check_restart(
     state: StateMachineResult,
     now: datetime,
-) -> List[Violation]:
+) -> list[Violation]:
     """§ 395.3(c) — 34-hour consecutive off-duty restart (cycle reset only).
 
     As of ``fmcsa-us-property@2.5.0`` the obsolete two 1–5 AM home-terminal

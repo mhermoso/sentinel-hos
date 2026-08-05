@@ -22,6 +22,17 @@
       <a href="/ui/logs" {% if current_path and current_path.startswith('/ui/logs') %}class="active"{% endif %}>Logs</a>
       <a href="/docs" target="_blank" rel="noopener">API</a>
     </nav>
+    {% if show_fleet_selector and fleets %}
+    <form class="tz-form" method="get" action="/ui/preferences/fleet" title="Active telematics fleet">
+      <label for="fleet-select">Fleet</label>
+      <select id="fleet-select" name="fleet" onchange="this.form.submit()">
+        {% for f in fleets %}
+        <option value="{{ f.fleet_id }}" {% if active_fleet and f.fleet_id == active_fleet.fleet_id %}selected{% endif %}>{{ f.display_name }}</option>
+        {% endfor %}
+      </select>
+      <input type="hidden" name="next" value="{{ current_path | default('/ui/home') }}" />
+    </form>
+    {% endif %}
     <form class="tz-form" method="get" action="/ui/preferences/timezone" title="Display timezone for day grids and alert times">
       <label for="tz-select">Local time</label>
       <select id="tz-select" name="tz" onchange="this.form.submit()">

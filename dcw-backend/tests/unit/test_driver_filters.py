@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.domains.dashboard.driver_filters import filter_drivers
 from app.domains.dashboard.schemas import DriverListItemResponse
@@ -21,7 +21,7 @@ def _driver(
         tenant_id="t1",
         is_live=is_live,
         event_count=1,
-        last_event_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        last_event_at=datetime(2026, 7, 1, tzinfo=UTC),
         current_status=current_status,
     )
 

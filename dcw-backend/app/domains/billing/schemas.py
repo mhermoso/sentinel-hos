@@ -1,8 +1,9 @@
-from datetime import datetime
 from enum import Enum
-from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, Field
+
 from app.core.billing import SaaSPlanTier
+
 
 class BillingCycleStatus(str, Enum):
     ACTIVE = "ACTIVE"
@@ -18,5 +19,5 @@ class TenantSubscriptionSchema(BaseModel):
     active_vehicles_metered: int = Field(0, ge=0)
     price_per_vehicle_usd: float = Field(8.00, ge=0.0)
     monthly_recurring_total_usd: float = Field(0.00, ge=0.0)
-    stripe_customer_id: Optional[str] = None
-    stripe_subscription_id: Optional[str] = None
+    stripe_customer_id: str | None = None
+    stripe_subscription_id: str | None = None

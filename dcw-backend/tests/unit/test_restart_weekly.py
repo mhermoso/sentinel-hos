@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
-from zoneinfo import ZoneInfo
 
 from app.core.config import settings
 from app.core.security import compute_inputs_hash
@@ -23,7 +23,7 @@ from app.domains.engine.schemas import DriverTimeline, ViolationType
 from app.domains.engine.state_machine import StateMachineResult, run_state_machine
 from app.domains.ingestion.schemas import CanonicalDutyStatus, DCWCanonicalHOSLog
 
-UTC = timezone.utc
+UTC = UTC
 CHICAGO = ZoneInfo("America/Chicago")
 _DATA_PATH = Path(__file__).resolve().parents[2] / "data" / "hos_30d_canonical.json"
 if not _DATA_PATH.exists():

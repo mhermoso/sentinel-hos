@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -12,7 +12,7 @@ from app.domains.engine.schemas import DriverTimeline
 from app.domains.ingestion.schemas import CanonicalDutyStatus
 from app.domains.notifier.backtest_lock import InMemoryAlertLock
 
-UTC = timezone.utc
+UTC = UTC
 
 
 def _ts(hours: float) -> datetime:

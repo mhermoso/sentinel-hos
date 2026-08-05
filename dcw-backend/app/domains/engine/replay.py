@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import List, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 
 from app.domains.engine.schemas import DriverTimeline
 from app.domains.ingestion.duty_filter import should_skip_duty_status_change
@@ -29,7 +29,7 @@ WEEKLY_DUTY_LOOKBACK_BUFFER_DAYS: int = 3
 
 def logs_to_timeline_events(
     logs: Sequence[DCWCanonicalHOSLog],
-) -> List[DriverTimeline.HOSEvent]:
+) -> list[DriverTimeline.HOSEvent]:
     """Convert canonical HOS logs to timeline events (chronological)."""
     sorted_logs = sorted(logs, key=lambda log: log.event_timestamp)
     return [
@@ -48,9 +48,9 @@ def truncate_timeline_to(
 ) -> DriverTimeline:
     """Keep events up to ``as_of`` and close the open segment with a synthetic event."""
     if as_of.tzinfo is None:
-        as_of = as_of.replace(tzinfo=timezone.utc)
+        as_of = as_of.replace(tzinfo=UTC)
     else:
-        as_of = as_of.astimezone(timezone.utc)
+        as_of = as_of.astimezone(UTC)
 
     events = [
         DriverTimeline.HOSEvent(status=e.status, timestamp=e.timestamp)
@@ -87,8 +87,8 @@ def truncate_timeline_to(
 
 def _normalize_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def is_valid_restart_period(

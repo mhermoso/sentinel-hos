@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -19,7 +19,7 @@ from app.domains.dashboard.schemas import DriverListItemResponse
 from app.domains.engine.schemas import DriverTimeline
 from app.domains.ingestion.schemas import CanonicalDutyStatus
 
-UTC = timezone.utc
+UTC = UTC
 CHICAGO = "America/Chicago"
 
 

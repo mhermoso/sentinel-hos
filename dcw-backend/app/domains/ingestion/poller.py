@@ -25,18 +25,26 @@ from pydantic import ValidationError
 from app.core.config import settings
 from app.core.database import async_session_factory, init_db
 from app.core.ops_log import configure_ops_log
-from app.core.redis import init_redis
-from app.domains.engine.sweeper import sweep_active_drivers
-from app.domains.ingestion.adapters.geotab import (
-    GeotabAdapter,
-    map_geotab_log_record_to_breadcrumb,
-)
+from app.core.redis import init_redis, migrate_legacy_active_drivers
 from app.domains.dashboard.driver_names import (
     save_driver_names_to_redis,
     warm_driver_name_cache,
 )
 from app.domains.engine.backtest_seed import maybe_run_backtest_seed
-from app.domains.ingestion.history_backfill import maybe_run_history_backfill
+from app.domains.engine.sweeper import sweep_active_drivers
+from app.domains.ingestion.adapters.geotab import (
+    GeotabAdapter,
+    map_geotab_log_record_to_breadcrumb,
+)
+from app.domains.ingestion.adapters.samsara import (
+    SamsaraAdapter,
+    map_samsara_gps_to_breadcrumb,
+)
+from app.domains.ingestion.fleets import sync_fleets_to_db
+from app.domains.ingestion.history_backfill import (
+    maybe_run_history_backfill,
+    maybe_run_samsara_history_backfill,
+)
 from app.domains.ingestion.normalizer import normalize_batch
 from app.domains.ingestion.repository import IngestionRepository
 from app.domains.ingestion.schemas import DCWGpsBreadcrumb
@@ -45,19 +53,25 @@ logger = logging.getLogger("dcw.ingestion.poller")
 
 # Module-level adapter instance (initialised on worker startup)
 _geotab_adapter: GeotabAdapter | None = None
+_samsara_adapter: SamsaraAdapter | None = None
 
 DEFAULT_CURSOR = "0000000000000000"
 LOG_RECORD_PROVIDER = "geotab-logrecord"
+SAMSARA_GPS_PROVIDER = "samsara-gps"
 
 
 async def startup(ctx: dict[str, Any]) -> None:
-    """ARQ worker startup hook — initialise DB, Redis, and Geotab adapter."""
-    global _geotab_adapter
+    """ARQ worker startup hook — initialise DB, Redis, and telematics adapters."""
+    global _geotab_adapter, _samsara_adapter
 
     configure_ops_log(process_name="worker")
     logger.info("Starting DCW ingestion worker…")
     await init_db()
     await init_redis()
+    await sync_fleets_to_db()
+
+    if settings.GEOTAB_DATABASE:
+        await migrate_legacy_active_drivers(settings.GEOTAB_DATABASE)
 
     if settings.GEOTAB_DATABASE and settings.GEOTAB_USERNAME and settings.GEOTAB_PASSWORD:
         try:
@@ -91,6 +105,26 @@ async def startup(ctx: dict[str, Any]) -> None:
             "GEOTAB_DATABASE, GEOTAB_USERNAME, and GEOTAB_PASSWORD are set"
         )
         ctx["geotab_adapter"] = None
+
+    if settings.SAMSARA_API_TOKEN:
+        try:
+            _samsara_adapter = SamsaraAdapter()
+            await _samsara_adapter.connect()
+            ctx["samsara_adapter"] = _samsara_adapter
+            logger.info("Samsara adapter connected (fleet_id=%s)", _samsara_adapter.fleet_id)
+        except Exception as exc:
+            logger.error("Samsara adapter connection failed: %s — Samsara poller will idle", exc)
+            ctx["samsara_adapter"] = None
+        else:
+            try:
+                await maybe_run_samsara_history_backfill(_samsara_adapter)
+            except Exception as exc:
+                logger.error(
+                    "Samsara history backfill failed: %s — continuing with live poll",
+                    exc,
+                )
+    else:
+        ctx["samsara_adapter"] = None
 
     logger.info("DCW ingestion worker ready")
 
@@ -140,7 +174,7 @@ async def poll_geotab_feed(ctx: dict[str, Any]) -> dict[str, Any]:
 
     # 5. Update Redis active driver set
     driver_ids = {log.driver_id for log in normalised_logs}
-    await IngestionRepository.update_active_drivers(driver_ids)
+    await IngestionRepository.update_active_drivers(tenant_id, driver_ids)
 
     # 6. Save cursor
     await IngestionRepository.save_cursor("geotab", tenant_id, next_cursor)
@@ -180,9 +214,7 @@ async def poll_geotab_log_records(ctx: dict[str, Any]) -> dict[str, Any]:
 
     if not raw_records:
         logger.info("No new Geotab LogRecords (cursor=%s)", cursor)
-        await IngestionRepository.save_cursor(
-            LOG_RECORD_PROVIDER, tenant_id, next_cursor
-        )
+        await IngestionRepository.save_cursor(LOG_RECORD_PROVIDER, tenant_id, next_cursor)
         return {"records_fetched": 0, "cursor": next_cursor}
 
     breadcrumbs: list[DCWGpsBreadcrumb] = []
@@ -219,9 +251,7 @@ async def poll_geotab_log_records(ctx: dict[str, Any]) -> dict[str, Any]:
                     as_of=event_ts,
                     cache=device_driver_cache,
                 )
-                crumb = map_geotab_log_record_to_breadcrumb(
-                    record, tenant_id=tenant_id, driver_id=driver_id
-                )
+                crumb = map_geotab_log_record_to_breadcrumb(record, tenant_id=tenant_id, driver_id=driver_id)
                 breadcrumbs.append(crumb)
             except ValidationError as ve:
                 logger.warning(
@@ -256,6 +286,176 @@ async def poll_geotab_log_records(ctx: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def poll_samsara_feed(ctx: dict[str, Any]) -> dict[str, Any]:
+    """ARQ cron task — poll Samsara for HOS logs (watermark + 24h rescan).
+
+    Orchestrates: fetch → normalise → hash → persist → update Redis.
+    Advances ``cursor:samsara:{fleet_id}`` only when the adapter reports an
+    advanced watermark (rate-limit / mid-pagination failures keep it unchanged).
+    """
+    adapter: SamsaraAdapter | None = ctx.get("samsara_adapter")
+    if adapter is None:
+        logger.debug("Samsara adapter not configured — skipping poll cycle")
+        return {"records_fetched": 0, "skipped": True}
+
+    tenant_id = adapter.fleet_id
+
+    # 1. Load watermark cursor (empty string = first poll / rescan window only)
+    cursor = await IngestionRepository.load_cursor("samsara", tenant_id)
+    if cursor is None:
+        cursor = ""
+
+    # 2. Fetch from Samsara (rescan window + pagination)
+    raw_logs, next_cursor = await adapter.fetch_feed(
+        tenant_id=tenant_id,
+        from_cursor=cursor,
+    )
+
+    inserted = 0
+    driver_ids: set[str] = set()
+
+    if raw_logs:
+        # 3. Normalise
+        normalised_logs = normalize_batch(raw_logs)
+
+        # 4. Persist to PostgreSQL
+        async with async_session_factory() as session:
+            repo = IngestionRepository(session)
+            inserted = await repo.persist_canonical_logs(normalised_logs)
+            await session.commit()
+
+        # 5. Update Redis active driver set for this fleet
+        driver_ids = {log.driver_id for log in normalised_logs}
+        await IngestionRepository.update_active_drivers(tenant_id, driver_ids)
+    else:
+        logger.info("No new Samsara records (cursor=%s)", cursor or "(empty)")
+
+    # 6. Save cursor only when the watermark advanced (successful full pagination)
+    if next_cursor != cursor:
+        await IngestionRepository.save_cursor("samsara", tenant_id, next_cursor)
+
+    logger.info(
+        "Samsara poll cycle complete: %d fetched, %d inserted, %d drivers active, cursor=%s",
+        len(raw_logs),
+        inserted,
+        len(driver_ids),
+        next_cursor,
+    )
+
+    return {
+        "records_fetched": len(raw_logs),
+        "records_inserted": inserted,
+        "drivers": list(driver_ids),
+        "cursor": next_cursor,
+    }
+
+
+async def poll_samsara_gps(ctx: dict[str, Any]) -> dict[str, Any]:
+    """ARQ cron task — poll Samsara vehicle-stats GPS breadcrumbs (ADR-007).
+
+    Uses native feed ``endCursor`` at ``cursor:samsara-gps:{fleet_id}``.
+    Device→driver attribution mirrors ``poll_geotab_log_records`` via
+    ``resolve_driver_for_device`` against this fleet's HOS rows.
+    """
+    adapter: SamsaraAdapter | None = ctx.get("samsara_adapter")
+    if adapter is None:
+        logger.debug("Samsara adapter not configured — skipping GPS poll")
+        return {"records_fetched": 0, "skipped": True}
+
+    tenant_id = adapter.fleet_id
+    cursor = await IngestionRepository.load_cursor(SAMSARA_GPS_PROVIDER, tenant_id)
+    if cursor is None:
+        cursor = ""
+
+    raw_records, next_cursor = await adapter.fetch_gps_feed(
+        tenant_id=tenant_id,
+        from_cursor=cursor,
+    )
+
+    breadcrumbs: list[DCWGpsBreadcrumb] = []
+    inserted = 0
+
+    if raw_records:
+        device_driver_cache: dict[str, str] = {}
+
+        async with async_session_factory() as session:
+            repo = IngestionRepository(session)
+            for record in raw_records:
+                vehicle_id = str(record.get("vehicleId") or "")
+                event_time = record.get("time")
+                try:
+                    if not vehicle_id:
+                        logger.warning("Samsara GPS record missing vehicleId — skipped")
+                        continue
+
+                    event_ts: datetime | None
+                    if isinstance(event_time, str):
+                        event_ts = datetime.fromisoformat(event_time)
+                    elif isinstance(event_time, datetime):
+                        event_ts = event_time
+                    else:
+                        event_ts = None
+                    if event_ts is not None and event_ts.tzinfo is None:
+                        event_ts = event_ts.replace(tzinfo=UTC)
+                    if event_ts is None:
+                        logger.warning(
+                            "Samsara GPS record missing time (vehicle=%s) — skipped",
+                            vehicle_id,
+                        )
+                        continue
+
+                    driver_id = await repo.resolve_driver_for_device(
+                        tenant_id=tenant_id,
+                        device_id=vehicle_id,
+                        as_of=event_ts,
+                        cache=device_driver_cache,
+                    )
+                    crumb = map_samsara_gps_to_breadcrumb(
+                        fleet_id=tenant_id,
+                        vehicle_id=vehicle_id,
+                        gps_entry=record,
+                        driver_id=driver_id,
+                    )
+                    breadcrumbs.append(crumb)
+                except ValidationError as ve:
+                    logger.warning(
+                        "Validation failed for Samsara GPS (vehicle=%s, time=%s): %s",
+                        vehicle_id or "?",
+                        event_time,
+                        ve.errors(),
+                    )
+                except (ValueError, TypeError) as exc:
+                    logger.warning(
+                        "Samsara GPS parse failure (vehicle=%s): %s",
+                        vehicle_id or "?",
+                        exc,
+                    )
+
+            inserted = await repo.persist_gps_breadcrumbs(breadcrumbs)
+            await session.commit()
+    else:
+        logger.info("No new Samsara GPS records (cursor=%s)", cursor or "(empty)")
+
+    # Advance native endCursor only when the adapter reports a new value
+    # (rate-limit / mid-pagination failures keep from_cursor unchanged).
+    if next_cursor != cursor:
+        await IngestionRepository.save_cursor(SAMSARA_GPS_PROVIDER, tenant_id, next_cursor)
+
+    logger.info(
+        "Samsara GPS poll complete: %d fetched, %d mapped, %d inserted, cursor=%s",
+        len(raw_records),
+        len(breadcrumbs),
+        inserted,
+        next_cursor or "(empty)",
+    )
+    return {
+        "records_fetched": len(raw_records),
+        "records_mapped": len(breadcrumbs),
+        "records_inserted": inserted,
+        "cursor": next_cursor,
+    }
+
+
 # ── ARQ Worker Settings ─────────────────────────────────────────────────
 
 
@@ -265,7 +465,13 @@ class WorkerSettings:
     Usage: ``arq app.domains.ingestion.poller.WorkerSettings``
     """
 
-    functions = [poll_geotab_feed, poll_geotab_log_records, sweep_active_drivers]
+    functions = [
+        poll_geotab_feed,
+        poll_geotab_log_records,
+        poll_samsara_feed,
+        poll_samsara_gps,
+        sweep_active_drivers,
+    ]
     cron_jobs = [
         cron(
             poll_geotab_feed,
@@ -281,6 +487,16 @@ class WorkerSettings:
             sweep_active_drivers,
             second={30},  # Runs 30s after each poll cycle
             run_at_startup=False,
+        ),
+        cron(
+            poll_samsara_feed,
+            second={45},  # Staggered after Geotab HOS (:00), GPS (:15), sweep (:30)
+            run_at_startup=True,
+        ),
+        cron(
+            poll_samsara_gps,
+            second={50},  # Staggered after Samsara HOS (:45); away from Geotab GPS (:15)
+            run_at_startup=True,
         ),
     ]
     on_startup = startup

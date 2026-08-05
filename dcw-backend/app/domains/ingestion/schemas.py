@@ -8,9 +8,9 @@ these canonical types.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -38,25 +38,25 @@ class DCWCanonicalHOSLog(BaseModel):
 
     tenant_id: str = Field(..., description="Unique customer database identifier")
     driver_id: str = Field(..., description="Normalized driver ID")
-    driver_name: Optional[str] = Field(None, description="Driver's full name")
+    driver_name: str | None = Field(None, description="Driver's full name")
     raw_id: str = Field(..., description="Provider-specific record ID")
     status: CanonicalDutyStatus
     event_timestamp: datetime = Field(
         ..., description="UTC timestamp of HOS status change"
     )
-    device_id: Optional[str] = Field(None, description="Assigned vehicle device ID")
-    latitude: Optional[float] = Field(None, ge=-90.0, le=90.0)
-    longitude: Optional[float] = Field(None, ge=-180.0, le=180.0)
-    odometer_km: Optional[float] = Field(
+    device_id: str | None = Field(None, description="Assigned vehicle device ID")
+    latitude: float | None = Field(None, ge=-90.0, le=90.0)
+    longitude: float | None = Field(None, ge=-180.0, le=180.0)
+    odometer_km: float | None = Field(
         None,
         ge=0.0,
         description="Vehicle odometer in meters (Geotab). Field name is legacy.",
     )
-    annotation: Optional[str] = Field(None, max_length=500)
-    raw_payload: Dict[str, Any] = Field(
+    annotation: str | None = Field(None, max_length=500)
+    raw_payload: dict[str, Any] = Field(
         ..., description="Sanitised snapshot of original provider JSON payload"
     )
-    inputs_hash: Optional[str] = Field(
+    inputs_hash: str | None = Field(
         None, description="SHA-256 digest of compliance-relevant fields"
     )
 
@@ -67,14 +67,14 @@ class DCWCanonicalHOSLog(BaseModel):
         if isinstance(value, str):
             dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
             else:
-                dt = dt.astimezone(timezone.utc)
+                dt = dt.astimezone(UTC)
             return dt
         elif isinstance(value, datetime):
             if value.tzinfo is None:
-                return value.replace(tzinfo=timezone.utc)
-            return value.astimezone(timezone.utc)
+                return value.replace(tzinfo=UTC)
+            return value.astimezone(UTC)
         return value
 
 
@@ -97,15 +97,15 @@ class DCWGpsBreadcrumb(BaseModel):
     event_timestamp: datetime = Field(..., description="UTC timestamp of GPS fix")
     latitude: float = Field(..., ge=-90.0, le=90.0)
     longitude: float = Field(..., ge=-180.0, le=180.0)
-    speed_kmh: Optional[float] = Field(
+    speed_kmh: float | None = Field(
         None,
         ge=0.0,
         description="Vehicle speed in km/h when reported by provider",
     )
-    raw_payload: Dict[str, Any] = Field(
+    raw_payload: dict[str, Any] = Field(
         ..., description="Sanitised snapshot of original provider JSON payload"
     )
-    inputs_hash: Optional[str] = Field(
+    inputs_hash: str | None = Field(
         None, description="SHA-256 digest of integrity-relevant fields"
     )
 
@@ -116,14 +116,14 @@ class DCWGpsBreadcrumb(BaseModel):
         if isinstance(value, str):
             dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
             else:
-                dt = dt.astimezone(timezone.utc)
+                dt = dt.astimezone(UTC)
             return dt
         elif isinstance(value, datetime):
             if value.tzinfo is None:
-                return value.replace(tzinfo=timezone.utc)
-            return value.astimezone(timezone.utc)
+                return value.replace(tzinfo=UTC)
+            return value.astimezone(UTC)
         return value
 
 
@@ -136,4 +136,4 @@ class IngestionBatchResult(BaseModel):
     records_valid: int = 0
     records_rejected: int = 0
     next_cursor: str = ""
-    driver_ids_seen: List[str] = Field(default_factory=list)
+    driver_ids_seen: list[str] = Field(default_factory=list)

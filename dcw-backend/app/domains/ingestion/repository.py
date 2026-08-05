@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Set
 
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -30,7 +29,7 @@ class IngestionRepository:
 
     async def persist_canonical_logs(
         self,
-        logs: List[DCWCanonicalHOSLog],
+        logs: list[DCWCanonicalHOSLog],
     ) -> int:
         """Insert canonical HOS logs into PostgreSQL (append-only, dedup by raw_id).
 
@@ -73,7 +72,7 @@ class IngestionRepository:
 
     async def persist_gps_breadcrumbs(
         self,
-        crumbs: List[DCWGpsBreadcrumb],
+        crumbs: list[DCWGpsBreadcrumb],
     ) -> int:
         """Insert GPS breadcrumbs (append-only, dedup by tenant_id + raw_id)."""
         if not crumbs:
@@ -112,7 +111,7 @@ class IngestionRepository:
         tenant_id: str,
         device_id: str,
         as_of: datetime,
-        cache: Optional[Dict[str, str]] = None,
+        cache: dict[str, str] | None = None,
     ) -> str:
         """Resolve driver_id from latest HOS log for device at or before ``as_of``.
 
@@ -145,7 +144,7 @@ class IngestionRepository:
         tenant_id: str,
         driver_id: str,
         limit: int = 500,
-    ) -> List[CanonicalHOSLogRecord]:
+    ) -> list[CanonicalHOSLogRecord]:
         """Fetch a driver's HOS timeline ordered by event_timestamp (newest first)."""
         stmt = (
             select(CanonicalHOSLogRecord)
@@ -165,7 +164,7 @@ class IngestionRepository:
         driver_id: str,
         start_utc: datetime,
         end_utc: datetime,
-    ) -> List[GpsBreadcrumbRecord]:
+    ) -> list[GpsBreadcrumbRecord]:
         """Fetch GPS breadcrumbs for a driver in ``[start_utc, end_utc)``."""
         stmt = (
             select(GpsBreadcrumbRecord)
@@ -186,7 +185,7 @@ class IngestionRepository:
         driver_id: str,
         start_utc: datetime,
         end_utc: datetime,
-    ) -> List[str]:
+    ) -> list[str]:
         """Return distinct non-null device IDs from a driver's HOS logs in a day window."""
         stmt = (
             select(CanonicalHOSLogRecord.device_id)
@@ -208,7 +207,7 @@ class IngestionRepository:
         driver_id: str,
         start_utc: datetime,
         end_utc: datetime,
-    ) -> List[GpsBreadcrumbRecord]:
+    ) -> list[GpsBreadcrumbRecord]:
         """Fetch GPS breadcrumbs for a driver's day route.
 
         Includes rows attributed to ``driver_id`` and crumbs on devices the driver
@@ -234,7 +233,7 @@ class IngestionRepository:
         )
         result = await self.session.execute(stmt)
         seen_raw_ids: set[str] = set()
-        deduped: List[GpsBreadcrumbRecord] = []
+        deduped: list[GpsBreadcrumbRecord] = []
         for crumb in result.scalars().all():
             if crumb.raw_id in seen_raw_ids:
                 continue
@@ -245,22 +244,24 @@ class IngestionRepository:
     # ── Redis State Caching ──────────────────────────────────────────────
 
     @staticmethod
-    async def update_active_drivers(driver_ids: Set[str]) -> None:
-        """Add driver IDs to the Redis active_drivers set."""
+    async def update_active_drivers(fleet_id: str, driver_ids: set[str]) -> None:
+        """Add driver IDs to the fleet's Redis active_drivers set."""
         if not driver_ids:
             return
         redis = await get_redis()
-        key = active_drivers_key()
+        key = active_drivers_key(fleet_id)
         await redis.sadd(key, *driver_ids)
         # Expire after 24 hours to auto-clean stale entries
         await redis.expire(key, 86400)
-        logger.debug("Updated active_drivers set with %d driver(s)", len(driver_ids))
+        logger.debug(
+            "Updated %s with %d driver(s)", key, len(driver_ids)
+        )
 
     @staticmethod
-    async def get_active_driver_ids() -> Set[str]:
-        """Return the current set of active driver IDs from Redis."""
+    async def get_active_driver_ids(fleet_id: str) -> set[str]:
+        """Return the fleet's current set of active driver IDs from Redis."""
         redis = await get_redis()
-        return await redis.smembers(active_drivers_key())
+        return await redis.smembers(active_drivers_key(fleet_id))
 
     @staticmethod
     async def save_cursor(provider: str, tenant_id: str, cursor_value: str) -> None:
@@ -271,7 +272,7 @@ class IngestionRepository:
         logger.debug("Saved cursor %s = %s", key, cursor_value)
 
     @staticmethod
-    async def load_cursor(provider: str, tenant_id: str) -> Optional[str]:
+    async def load_cursor(provider: str, tenant_id: str) -> str | None:
         """Load the last saved polling cursor from Redis."""
         redis = await get_redis()
         key = cursor_key(provider, tenant_id)

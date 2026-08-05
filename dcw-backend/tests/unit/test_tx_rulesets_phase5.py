@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -30,7 +30,7 @@ from app.domains.engine.tx_calculators import TX_WEEKLY_LIMIT_SECONDS
 from app.domains.engine.tx_state_machine import run_tx_state_machine
 from app.domains.ingestion.schemas import CanonicalDutyStatus
 
-UTC = timezone.utc
+UTC = UTC
 DALLAS = WorkReportingLocation(latitude=32.7767, longitude=-96.7970)
 
 

@@ -10,10 +10,9 @@ Implements the Normalization Engine from the architecture spec:
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.domains.ingestion.schemas import CanonicalDutyStatus, DCWCanonicalHOSLog
-
 
 # ── Payload Sanitisation ─────────────────────────────────────────────────
 
@@ -33,9 +32,9 @@ def _json_safe_value(value: Any) -> Any:
     return value
 
 
-def sanitize_raw_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def sanitize_raw_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Recursively scrub sensitive keys from raw payload dicts."""
-    sanitized: Dict[str, Any] = {}
+    sanitized: dict[str, Any] = {}
     for k, v in payload.items():
         if k.lower() in _SENSITIVE_KEYS:
             sanitized[k] = "[MASKED]"
@@ -64,9 +63,9 @@ def normalize_timestamp(dt: datetime) -> datetime:
 # ── GPS Coordinate Normalisation ─────────────────────────────────────────
 
 def normalize_coordinates(
-    latitude: Optional[float],
-    longitude: Optional[float],
-) -> tuple[Optional[float], Optional[float]]:
+    latitude: float | None,
+    longitude: float | None,
+) -> tuple[float | None, float | None]:
     """Round GPS coordinates to 4 decimal places (~11.1m precision)."""
     if latitude is not None:
         latitude = round(latitude, 4)
@@ -79,7 +78,7 @@ def normalize_coordinates(
 
 def apply_ecm_override(
     status: CanonicalDutyStatus,
-    vehicle_speed_mph: Optional[float] = None,
+    vehicle_speed_mph: float | None = None,
 ) -> CanonicalDutyStatus:
     """Override ambiguous off-duty status to DRIVING if vehicle speed > 5 mph.
 
@@ -96,7 +95,7 @@ def apply_ecm_override(
 
 def normalize_canonical_log(
     log: DCWCanonicalHOSLog,
-    vehicle_speed_mph: Optional[float] = None,
+    vehicle_speed_mph: float | None = None,
 ) -> DCWCanonicalHOSLog:
     """Apply the full normalisation pipeline to a canonical HOS log.
 
@@ -123,8 +122,8 @@ def normalize_canonical_log(
 
 
 def normalize_batch(
-    logs: List[DCWCanonicalHOSLog],
-    vehicle_speed_mph: Optional[float] = None,
-) -> List[DCWCanonicalHOSLog]:
+    logs: list[DCWCanonicalHOSLog],
+    vehicle_speed_mph: float | None = None,
+) -> list[DCWCanonicalHOSLog]:
     """Apply normalisation to a batch of canonical logs."""
     return [normalize_canonical_log(log, vehicle_speed_mph) for log in logs]

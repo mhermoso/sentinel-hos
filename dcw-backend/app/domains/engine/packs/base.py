@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Optional, Protocol, Sequence
+from typing import Protocol
 
 from app.domains.engine.schemas import (
     ComplianceResult,
@@ -33,13 +34,13 @@ class RulePackModule(Protocol):
         *,
         version: str,
         weekly_duty_seconds: float,
-        as_of: Optional[datetime],
+        as_of: datetime | None,
         profile: DriverProfile,
-        gps_fixes: Optional[Sequence[GpsFix]] = None,
+        gps_fixes: Sequence[GpsFix] | None = None,
         short_haul_failure_days_30: int = 0,
-        day_annotations: Optional[DayAnnotations] = None,
-        adverse_driving: Optional[bool] = None,
-        sixteen_hour_exception: Optional[bool] = None,
+        day_annotations: DayAnnotations | None = None,
+        adverse_driving: bool | None = None,
+        sixteen_hour_exception: bool | None = None,
     ) -> ComplianceResult: ...
 
 

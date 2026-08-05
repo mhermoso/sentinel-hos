@@ -1,7 +1,8 @@
 """ARQ compliance sweeper — scans active drivers and evaluates compliance.
 
-Triggered on a cron schedule after each ingestion cycle:
-  1. Reads ``set:active_drivers`` from Redis.
+Triggered on a cron schedule after each ingestion cycle. For each enabled
+fleet (isolated — one fleet's failure never stops the others):
+  1. Reads ``set:active_drivers:{fleet_id}`` from Redis.
   2. For each driver: fetches timeline from PostgreSQL.
   3. Runs the versioned rule pack.
   4. Persists the audit record.
@@ -12,8 +13,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from app.core.config import settings
 from app.core.database import async_session_factory
@@ -36,6 +37,7 @@ from app.domains.engine.short_haul_counter import (
     record_short_haul_failure_day,
 )
 from app.domains.engine.state_machine import run_state_machine
+from app.domains.ingestion.fleets import list_enabled_fleets
 from app.domains.ingestion.repository import IngestionRepository
 
 logger = logging.getLogger("dcw.engine.sweeper")
@@ -46,17 +48,53 @@ _rule_pack = RulePack(version=settings.DEFAULT_RULE_PACK_VERSION)
 _NON_TELEPHONY_VIOLATIONS = NON_TELEPHONY_FINDINGS
 
 
-async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
-    """ARQ task — evaluate compliance for all currently active drivers.
+async def sweep_active_drivers(ctx: dict[str, Any]) -> dict[str, Any]:
+    """ARQ task — evaluate compliance for every enabled fleet's active drivers.
 
-    Designed to run shortly after each ingestion poll cycle completes.
+    Designed to run shortly after each ingestion poll cycle completes. Fleets
+    are swept sequentially and independently: one fleet's failure is logged
+    and never aborts the others.
     """
-    tenant_id = settings.GEOTAB_DATABASE
-    driver_ids = await IngestionRepository.get_active_driver_ids()
+    fleets = await list_enabled_fleets()
+    if not fleets:
+        logger.info("No enabled fleets to sweep")
+        return {"drivers_swept": 0, "violations_published": 0, "fleets": {}}
+
+    total_swept = 0
+    total_published = 0
+    per_fleet: dict[str, dict[str, int]] = {}
+
+    for fleet in fleets:
+        try:
+            fleet_result = await _sweep_fleet(fleet.fleet_id)
+        except Exception:
+            logger.exception("Sweeper failed for fleet %s", fleet.fleet_id)
+            per_fleet[fleet.fleet_id] = {"drivers_swept": 0, "violations_published": 0, "errors": 1}
+            continue
+        per_fleet[fleet.fleet_id] = fleet_result
+        total_swept += fleet_result["drivers_swept"]
+        total_published += fleet_result["violations_published"]
+
+    logger.info(
+        "Sweep complete: %d fleet(s), %d drivers evaluated, %d violation events published",
+        len(fleets),
+        total_swept,
+        total_published,
+    )
+    return {
+        "drivers_swept": total_swept,
+        "violations_published": total_published,
+        "fleets": per_fleet,
+    }
+
+
+async def _sweep_fleet(tenant_id: str) -> dict[str, int]:
+    """Evaluate compliance for one fleet's currently active drivers."""
+    driver_ids = await IngestionRepository.get_active_driver_ids(tenant_id)
 
     if not driver_ids:
-        logger.info("No active drivers to sweep")
-        return {"drivers_swept": 0}
+        logger.info("No active drivers to sweep for fleet %s", tenant_id)
+        return {"drivers_swept": 0, "violations_published": 0}
 
     swept = 0
     violations_published = 0
@@ -80,7 +118,7 @@ async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
                     continue
 
                 # 2. Compute weekly duty seconds for 60/70h rule
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 weekly_seconds = compute_weekly_duty_seconds(
                     timeline.events,
                     as_of=now,
@@ -116,7 +154,7 @@ async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
                     start_utc=gps_start,
                     end_utc=now + timedelta(seconds=1),
                 )
-                gps_fixes: List[GpsFix] = [
+                gps_fixes: list[GpsFix] = [
                     GpsFix(
                         latitude=float(c.latitude),
                         longitude=float(c.longitude),
@@ -219,7 +257,8 @@ async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
                 continue
 
     logger.info(
-        "Sweep complete: %d drivers evaluated, %d violation events published",
+        "Fleet %s sweep: %d drivers evaluated, %d violation events published",
+        tenant_id,
         swept,
         violations_published,
     )

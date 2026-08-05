@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import pytest
 from starlette.requests import Request
 
 from app.domains.dashboard.alert_detail import build_alert_detail
@@ -19,7 +18,7 @@ from app.domains.dashboard.timezone import (
 from app.domains.engine.schemas import DriverTimeline
 from app.domains.ingestion.schemas import CanonicalDutyStatus
 
-UTC = timezone.utc
+UTC = UTC
 CHICAGO = ZoneInfo("America/Chicago")
 
 

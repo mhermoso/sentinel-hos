@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 from app.domains.dashboard.day_builder import RawHOSEvent, build_day_points, chicago_day_bounds
@@ -25,21 +25,21 @@ def test_ignored_log_does_not_interrupt_day_timeline() -> None:
     """isIgnored D→noise→OFF keeps D until real OFF (like UNKNOWN)."""
     bounds = chicago_day_bounds(date(2025, 7, 28), ZoneInfo("America/Chicago"))
     events = [
-        RawHOSEvent("OFF", datetime(2025, 7, 27, 20, 0, tzinfo=timezone.utc)),
-        RawHOSEvent("D", datetime(2025, 7, 28, 14, 0, tzinfo=timezone.utc), odometer_m=1000.0),
+        RawHOSEvent("OFF", datetime(2025, 7, 27, 20, 0, tzinfo=UTC)),
+        RawHOSEvent("D", datetime(2025, 7, 28, 14, 0, tzinfo=UTC), odometer_m=1000.0),
         RawHOSEvent(
             "ON",
-            datetime(2025, 7, 28, 16, 0, tzinfo=timezone.utc),
+            datetime(2025, 7, 28, 16, 0, tzinfo=UTC),
             odometer_m=5000.0,
             raw_payload={"isIgnored": True, "eventRecordStatus": 1},
         ),
         RawHOSEvent(
             "SB",
-            datetime(2025, 7, 28, 17, 0, tzinfo=timezone.utc),
+            datetime(2025, 7, 28, 17, 0, tzinfo=UTC),
             odometer_m=6000.0,
             raw_payload={"eventRecordStatus": 2},
         ),
-        RawHOSEvent("OFF", datetime(2025, 7, 28, 18, 0, tzinfo=timezone.utc), odometer_m=6000.0),
+        RawHOSEvent("OFF", datetime(2025, 7, 28, 18, 0, tzinfo=UTC), odometer_m=6000.0),
     ]
     grid, totals, _carry = build_day_points(events, bounds)
     statuses = [e["status"] for e in grid]
@@ -59,7 +59,7 @@ def test_logs_to_timeline_skips_ignored() -> None:
             driver_id="d1",
             raw_id="1",
             status=CanonicalDutyStatus.DRIVING,
-            event_timestamp=datetime(2025, 7, 28, 14, 0, tzinfo=timezone.utc),
+            event_timestamp=datetime(2025, 7, 28, 14, 0, tzinfo=UTC),
             raw_payload={"eventRecordStatus": 1},
         ),
         DCWCanonicalHOSLog(
@@ -67,7 +67,7 @@ def test_logs_to_timeline_skips_ignored() -> None:
             driver_id="d1",
             raw_id="2",
             status=CanonicalDutyStatus.ON_DUTY,
-            event_timestamp=datetime(2025, 7, 28, 15, 0, tzinfo=timezone.utc),
+            event_timestamp=datetime(2025, 7, 28, 15, 0, tzinfo=UTC),
             raw_payload={"isIgnored": True},
         ),
         DCWCanonicalHOSLog(
@@ -75,7 +75,7 @@ def test_logs_to_timeline_skips_ignored() -> None:
             driver_id="d1",
             raw_id="3",
             status=CanonicalDutyStatus.OFF_DUTY,
-            event_timestamp=datetime(2025, 7, 28, 16, 0, tzinfo=timezone.utc),
+            event_timestamp=datetime(2025, 7, 28, 16, 0, tzinfo=UTC),
             raw_payload={"eventRecordStatus": 1},
         ),
     ]

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from app.domains.dashboard.alert_filters import normalize_filter_str
 from app.domains.dashboard.schemas import DriverListItemResponse
 
@@ -11,9 +9,9 @@ from app.domains.dashboard.schemas import DriverListItemResponse
 def filter_drivers(
     drivers: list[DriverListItemResponse],
     *,
-    q: Optional[str] = None,
-    status: Optional[str] = None,
-    mode: Optional[str] = None,
+    q: str | None = None,
+    status: str | None = None,
+    mode: str | None = None,
 ) -> list[DriverListItemResponse]:
     """Filter driver rows by search text, duty status, and live/historical mode."""
     q_n = normalize_filter_str(q)

@@ -7,8 +7,8 @@ Key: ``short_haul_fail_days:{tenant_id}:{driver_id}`` — Redis SET of ISO dates
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta
-from typing import Iterable, Set
 from zoneinfo import ZoneInfo
 
 from app.core.redis import get_redis, short_haul_fail_days_key
@@ -19,9 +19,9 @@ logger = logging.getLogger("dcw.engine.short_haul_counter")
 WINDOW_DAYS: int = 30
 
 
-def _prune_dates(dates: Iterable[str], as_of_day: date) -> Set[str]:
+def _prune_dates(dates: Iterable[str], as_of_day: date) -> set[str]:
     cutoff = as_of_day - timedelta(days=WINDOW_DAYS - 1)
-    kept: Set[str] = set()
+    kept: set[str] = set()
     for raw in dates:
         try:
             d = date.fromisoformat(raw)
@@ -38,7 +38,7 @@ async def get_short_haul_failure_days(
     *,
     as_of: datetime,
     home_terminal_timezone: str,
-) -> Set[str]:
+) -> set[str]:
     """Return ISO failure days within the rolling 30-day window."""
     redis = await get_redis()
     key = short_haul_fail_days_key(tenant_id, driver_id)

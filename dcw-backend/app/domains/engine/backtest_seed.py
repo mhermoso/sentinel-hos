@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any
 
 from sqlalchemy import select
 
@@ -48,10 +48,10 @@ def record_to_canonical(record: CanonicalHOSLogRecord) -> DCWCanonicalHOSLog:
 async def load_grouped_hos_from_postgres(
     tenant_id: str,
     days: int,
-) -> Dict[str, List[DCWCanonicalHOSLog]]:
+) -> dict[str, list[DCWCanonicalHOSLog]]:
     """Load last ``days`` of HOS logs grouped by driver_id."""
     since = datetime.now(UTC) - timedelta(days=days)
-    grouped: Dict[str, List[DCWCanonicalHOSLog]] = {}
+    grouped: dict[str, list[DCWCanonicalHOSLog]] = {}
 
     async with async_session_factory() as session:
         stmt = (

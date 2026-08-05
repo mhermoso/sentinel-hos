@@ -7,7 +7,8 @@ status continues.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Union
+from collections.abc import Mapping
+from typing import Any
 
 from app.domains.ingestion.schemas import CanonicalDutyStatus
 
@@ -16,11 +17,11 @@ INACTIVE_EVENT_RECORD_STATUSES = frozenset({2, 3, 4})
 
 
 def should_skip_duty_status_change(
-    status: Optional[Union[str, CanonicalDutyStatus]] = None,
-    raw_payload: Optional[Mapping[str, Any]] = None,
+    status: str | CanonicalDutyStatus | None = None,
+    raw_payload: Mapping[str, Any] | None = None,
 ) -> bool:
     """Return True when the log must not change the duty timeline."""
-    status_val: Optional[str]
+    status_val: str | None
     if status is None:
         status_val = None
     elif isinstance(status, CanonicalDutyStatus):

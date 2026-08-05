@@ -5,13 +5,13 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -31,7 +31,7 @@ from app.domains.dashboard.driver_clocks import (
 )
 from app.domains.dashboard.driver_filters import filter_drivers
 from app.domains.dashboard.driver_names import resolve_driver_name
-from app.domains.dashboard.route_builder import build_day_route_payload
+from app.domains.dashboard.fleet_select import resolve_fleet, set_fleet_cookie
 from app.domains.dashboard.ops_feed import (
     LogFilter,
     infer_worker_status,
@@ -41,6 +41,7 @@ from app.domains.dashboard.ops_feed import (
     rows_from_ingestion,
     rows_from_ops,
 )
+from app.domains.dashboard.route_builder import build_day_route_payload
 from app.domains.dashboard.router import (
     _build_driver_day,
     _list_all_drivers,
@@ -61,6 +62,7 @@ from app.domains.dashboard.timezone import (
     zoneinfo_for,
 )
 from app.domains.engine.repository import EngineRepository
+from app.domains.ingestion.fleets import list_enabled_fleets
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.repository import IngestionRepository
 
@@ -79,18 +81,29 @@ def _today_local(display_tz: str) -> date:
     return datetime.now(zoneinfo_for(display_tz)).date()
 
 
-def _parse_date(value: Optional[str], display_tz: str) -> date:
+def _parse_date(value: str | None, display_tz: str) -> date:
     if not value:
         return _today_local(display_tz)
     return date.fromisoformat(value)
 
 
-def _tz_context(request: Request, tz_param: Optional[str] = None) -> Dict[str, Any]:
+async def _base_context(
+    request: Request,
+    *,
+    tz_param: str | None = None,
+    fleet_param: str | None = None,
+) -> dict[str, Any]:
+    """Timezone + fleet context for every UI page (header selector)."""
     display_tz = resolve_display_timezone(request, tz_param=tz_param)
+    fleets = await list_enabled_fleets()
+    active_fleet = await resolve_fleet(request, fleet_param=fleet_param)
     return {
         "timezone": display_tz,
         "tz_abbrev": tz_abbreviation(display_tz),
         "display_timezones": DISPLAY_TIMEZONES,
+        "fleets": fleets,
+        "active_fleet": active_fleet,
+        "show_fleet_selector": len(fleets) > 1,
     }
 
 
@@ -104,14 +117,15 @@ async def ui_home(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    """Fleet home: map, 30d warning/violation summary, live Geotab feed."""
-    tz_ctx = _tz_context(request)
-    display_tz = tz_ctx["timezone"]
+    """Fleet home: map, 30d warning/violation summary, live ingestion feed."""
+    base_ctx = await _base_context(request)
+    display_tz = base_ctx["timezone"]
     from_d, to_d = default_alerts_local_range(display_tz)
     from_ts, to_ts = local_dates_to_utc_window(from_d, to_d, display_tz)
 
-    positions_resp = await get_driver_positions(session=session)
+    positions_resp = await get_driver_positions(request=request, session=session)
     alerts_resp = await list_fleet_alerts(
+        request=request,
         severity=None,
         from_ts=from_ts,
         to_ts=to_ts,
@@ -128,11 +142,11 @@ async def ui_home(
         1 for a in alerts_resp.alerts if str(a.severity).upper() == "VIOLATION"
     )
     positioned_ids = {p.driver_id for p in positions_resp.positions}
-    all_drivers = await _list_all_drivers(session)
+    all_drivers = await _list_all_drivers(session, base_ctx["active_fleet"].fleet_id)
     no_location = [d for d in all_drivers if d.driver_id not in positioned_ids]
     positions_json = [p.model_dump(mode="json") for p in positions_resp.positions]
     health = await _health_context(session)
-    feed_resp = await get_recent_ingestion(limit=20, session=session)
+    feed_resp = await get_recent_ingestion(request=request, limit=20, session=session)
     feed_newest_raw_id = feed_resp.events[0].raw_id if feed_resp.events else ""
 
     return templates.TemplateResponse(
@@ -153,7 +167,7 @@ async def ui_home(
             "alert_dry_run": settings.ALERT_DRY_RUN,
             "rule_pack_version": settings.DEFAULT_RULE_PACK_VERSION,
             "current_path": str(request.url.path),
-            **tz_ctx,
+            **base_ctx,
         },
     )
 
@@ -164,17 +178,17 @@ async def ui_home_feed(
     limit: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    """HTMX partial: live Geotab ingestion feed (newest by ingested_at)."""
-    resp = await get_recent_ingestion(limit=limit, session=session)
+    """HTMX partial: live ingestion feed (newest by ingested_at)."""
+    resp = await get_recent_ingestion(request=request, limit=limit, session=session)
     newest_raw_id = resp.events[0].raw_id if resp.events else ""
-    tz_ctx = _tz_context(request)
+    base_ctx = await _base_context(request)
     return templates.TemplateResponse(
         request,
         "partials/geotab_feed.html",
         {
             "events": resp.events,
             "newest_raw_id": newest_raw_id,
-            **tz_ctx,
+            **base_ctx,
         },
     )
 
@@ -194,7 +208,23 @@ async def ui_set_timezone(
     return response
 
 
-def _parse_optional_local_date(value: Optional[str]) -> Optional[date]:
+@ui_router.get("/ui/preferences/fleet", include_in_schema=False)
+async def ui_set_fleet(
+    request: Request,
+    fleet: str = Query(..., description="Fleet id"),
+    next: str = Query(default="/ui/home", alias="next"),
+) -> RedirectResponse:
+    """Persist active fleet cookie and redirect back."""
+    if not next.startswith("/"):
+        next = "/ui/home"
+    response = RedirectResponse(url=next, status_code=302)
+    fleets = await list_enabled_fleets()
+    if fleet in {f.fleet_id for f in fleets}:
+        set_fleet_cookie(response, fleet)
+    return response
+
+
+def _parse_optional_local_date(value: str | None) -> date | None:
     cleaned = normalize_filter_str(value)
     if not cleaned:
         return None
@@ -204,12 +234,12 @@ def _parse_optional_local_date(value: Optional[str]) -> Optional[date]:
 def _alerts_query_context(
     display_tz: str,
     *,
-    severity: Optional[str],
-    source: Optional[str],
-    from_date: Optional[str],
-    to_date: Optional[str],
-    driver_id: Optional[str],
-) -> Dict[str, Any]:
+    severity: str | None,
+    source: str | None,
+    from_date: str | None,
+    to_date: str | None,
+    driver_id: str | None,
+) -> dict[str, Any]:
     """Normalize filters and apply default last-30d window when dates omitted."""
     severity_n = normalize_filter_str(severity)
     source_n = normalize_filter_str(source)
@@ -226,7 +256,7 @@ def _alerts_query_context(
     assert from_d is not None and to_d is not None
     from_ts, to_ts = local_dates_to_utc_window(from_d, to_d, display_tz)
     active_range = detect_active_range(from_d, to_d, display_tz)
-    range_chips: List[Dict[str, str]] = []
+    range_chips: list[dict[str, str]] = []
     for key, label in (
         ("7d", "Last 7"),
         ("21d", "Last 21"),
@@ -261,10 +291,10 @@ def _alerts_query_context(
 
 def _drivers_query_context(
     *,
-    q: Optional[str],
-    status: Optional[str],
-    mode: Optional[str],
-) -> Dict[str, Any]:
+    q: str | None,
+    status: str | None,
+    mode: str | None,
+) -> dict[str, Any]:
     """Normalize driver list filters for templates and filter_drivers."""
     q_n = normalize_filter_str(q)
     status_n = normalize_filter_str(status)
@@ -284,14 +314,15 @@ def _drivers_query_context(
 async def _drivers_page_context(
     session: AsyncSession,
     *,
-    q: Optional[str],
-    status: Optional[str],
-    mode: Optional[str],
+    q: str | None,
+    status: str | None,
+    mode: str | None,
     display_tz: str,
-) -> Dict[str, Any]:
+    tenant_id: str,
+) -> dict[str, Any]:
     """Shared drivers list filter context."""
     filt = _drivers_query_context(q=q, status=status, mode=mode)
-    all_drivers = await _list_all_drivers(session)
+    all_drivers = await _list_all_drivers(session, tenant_id)
     drivers = filter_drivers(
         all_drivers,
         q=filt["q_filter"],
@@ -312,12 +343,12 @@ async def _build_day_clocks_for_driver(
     driver_id: str,
     local_date: date,
     display_tz: str,
-) -> Optional[DriverDayClocks]:
+    tenant_id: str,
+) -> DriverDayClocks | None:
     """Fetch lookback logs and recompute day-view clocks at the day as-of instant."""
     as_of = day_view_as_of(local_date, display_tz)
     lookback = settings.WEEKLY_CYCLE_DAYS + 3
     cutoff = as_of - timedelta(days=lookback)
-    tenant_id = settings.GEOTAB_DATABASE
     stmt = (
         select(CanonicalHOSLogRecord)
         .where(
@@ -347,18 +378,19 @@ async def _build_day_clocks_for_driver(
 @ui_router.get("/ui/drivers", response_class=HTMLResponse)
 async def ui_drivers(
     request: Request,
-    q: Optional[str] = Query(default=None),
-    status: Optional[str] = Query(default=None),
-    mode: Optional[str] = Query(default=None),
+    q: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    mode: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    tz_ctx = _tz_context(request)
+    base_ctx = await _base_context(request)
     ctx = await _drivers_page_context(
         session,
         q=q,
         status=status,
         mode=mode,
-        display_tz=tz_ctx["timezone"],
+        display_tz=base_ctx["timezone"],
+        tenant_id=base_ctx["active_fleet"].fleet_id,
     )
     health = await _health_context(session)
     return templates.TemplateResponse(
@@ -370,7 +402,7 @@ async def ui_drivers(
             "alert_dry_run": settings.ALERT_DRY_RUN,
             "rule_pack_version": settings.DEFAULT_RULE_PACK_VERSION,
             "current_path": str(request.url.path),
-            **tz_ctx,
+            **base_ctx,
         },
     )
 
@@ -378,24 +410,25 @@ async def ui_drivers(
 @ui_router.get("/ui/drivers/partial", response_class=HTMLResponse)
 async def ui_drivers_partial(
     request: Request,
-    q: Optional[str] = Query(default=None),
-    status: Optional[str] = Query(default=None),
-    mode: Optional[str] = Query(default=None),
+    q: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    mode: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     """HTMX fragment: refreshable driver list rows."""
-    tz_ctx = _tz_context(request)
+    base_ctx = await _base_context(request)
     ctx = await _drivers_page_context(
         session,
         q=q,
         status=status,
         mode=mode,
-        display_tz=tz_ctx["timezone"],
+        display_tz=base_ctx["timezone"],
+        tenant_id=base_ctx["active_fleet"].fleet_id,
     )
     return templates.TemplateResponse(
         request,
         "partials/drivers_refresh.html",
-        {**ctx, **tz_ctx},
+        {**ctx, **base_ctx},
     )
 
 
@@ -403,20 +436,25 @@ async def ui_drivers_partial(
 async def ui_driver_day(
     request: Request,
     driver_id: str,
-    date_str: Optional[str] = Query(default=None, alias="date"),
+    date_str: str | None = Query(default=None, alias="date"),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    tz_ctx = _tz_context(request)
-    display_tz = tz_ctx["timezone"]
+    base_ctx = await _base_context(request)
+    display_tz = base_ctx["timezone"]
+    tenant_id = base_ctx["active_fleet"].fleet_id
     local_date = _parse_date(date_str, display_tz)
-    day = await _build_driver_day(session, driver_id, local_date, display_tz=display_tz)
+    day = await _build_driver_day(
+        session, driver_id, local_date, tenant_id, display_tz=display_tz
+    )
     day_clocks = await _build_day_clocks_for_driver(
-        session, driver_id, local_date, display_tz
+        session, driver_id, local_date, display_tz, tenant_id
     )
     health = await _health_context(session)
     prev_date = (local_date - timedelta(days=1)).isoformat()
     next_date = (local_date + timedelta(days=1)).isoformat()
-    available_dates = await _available_local_dates(session, driver_id, display_tz)
+    available_dates = await _available_local_dates(
+        session, driver_id, display_tz, tenant_id
+    )
 
     return templates.TemplateResponse(
         request,
@@ -434,7 +472,7 @@ async def ui_driver_day(
             "day_json": day.model_dump(mode="json"),
             "current_path": str(request.url.path)
             + (f"?date={local_date.isoformat()}" if date_str else ""),
-            **tz_ctx,
+            **base_ctx,
         },
     )
 
@@ -443,16 +481,19 @@ async def ui_driver_day(
 async def ui_driver_day_partial(
     request: Request,
     driver_id: str,
-    date_str: Optional[str] = Query(default=None, alias="date"),
+    date_str: str | None = Query(default=None, alias="date"),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     """HTMX fragment: refreshable day clocks + grid + totals + markers."""
-    tz_ctx = _tz_context(request)
-    display_tz = tz_ctx["timezone"]
+    base_ctx = await _base_context(request)
+    display_tz = base_ctx["timezone"]
+    tenant_id = base_ctx["active_fleet"].fleet_id
     local_date = _parse_date(date_str, display_tz)
-    day = await _build_driver_day(session, driver_id, local_date, display_tz=display_tz)
+    day = await _build_driver_day(
+        session, driver_id, local_date, tenant_id, display_tz=display_tz
+    )
     day_clocks = await _build_day_clocks_for_driver(
-        session, driver_id, local_date, display_tz
+        session, driver_id, local_date, display_tz, tenant_id
     )
     return templates.TemplateResponse(
         request,
@@ -462,6 +503,7 @@ async def ui_driver_day_partial(
             "day_clocks": day_clocks,
             "day_json": day.model_dump(mode="json"),
             "timezone": display_tz,
+            **base_ctx,
         },
     )
 
@@ -469,15 +511,15 @@ async def ui_driver_day_partial(
 @ui_router.get("/ui/alerts", response_class=HTMLResponse)
 async def ui_alerts(
     request: Request,
-    severity: Optional[str] = Query(default=None),
-    source: Optional[str] = Query(default=None),
-    from_date: Optional[str] = Query(default=None, alias="from"),
-    to_date: Optional[str] = Query(default=None, alias="to"),
-    driver_id: Optional[str] = Query(default=None),
+    severity: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    from_date: str | None = Query(default=None, alias="from"),
+    to_date: str | None = Query(default=None, alias="to"),
+    driver_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    tz_ctx = _tz_context(request)
-    display_tz = tz_ctx["timezone"]
+    base_ctx = await _base_context(request)
+    display_tz = base_ctx["timezone"]
     q = _alerts_query_context(
         display_tz,
         severity=severity,
@@ -487,6 +529,7 @@ async def ui_alerts(
         driver_id=driver_id,
     )
     response = await list_fleet_alerts(
+        request=request,
         severity=q["severity_filter"],
         from_ts=q["from_ts"],
         to_ts=q["to_ts"],
@@ -512,7 +555,7 @@ async def ui_alerts(
             "alert_dry_run": settings.ALERT_DRY_RUN,
             "rule_pack_version": settings.DEFAULT_RULE_PACK_VERSION,
             "current_path": str(request.url.path),
-            **tz_ctx,
+            **base_ctx,
         },
     )
 
@@ -520,15 +563,15 @@ async def ui_alerts(
 @ui_router.get("/ui/alerts/partial", response_class=HTMLResponse)
 async def ui_alerts_partial(
     request: Request,
-    severity: Optional[str] = Query(default=None),
-    source: Optional[str] = Query(default=None),
-    from_date: Optional[str] = Query(default=None, alias="from"),
-    to_date: Optional[str] = Query(default=None, alias="to"),
-    driver_id: Optional[str] = Query(default=None),
+    severity: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    from_date: str | None = Query(default=None, alias="from"),
+    to_date: str | None = Query(default=None, alias="to"),
+    driver_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    tz_ctx = _tz_context(request)
-    display_tz = tz_ctx["timezone"]
+    base_ctx = await _base_context(request)
+    display_tz = base_ctx["timezone"]
     q = _alerts_query_context(
         display_tz,
         severity=severity,
@@ -538,6 +581,7 @@ async def ui_alerts_partial(
         driver_id=driver_id,
     )
     response = await list_fleet_alerts(
+        request=request,
         severity=q["severity_filter"],
         from_ts=q["from_ts"],
         to_ts=q["to_ts"],
@@ -549,7 +593,7 @@ async def ui_alerts_partial(
     return templates.TemplateResponse(
         request,
         "partials/alert_rows.html",
-        {"alerts": response.alerts, **tz_ctx},
+        {"alerts": response.alerts, **base_ctx},
     )
 
 
@@ -564,14 +608,14 @@ async def _alert_detail_page_context(
     severity: str,
     rule_ref: str,
     session: AsyncSession,
-) -> Dict[str, Any]:
-    tz_ctx = _tz_context(request)
-    display_tz = tz_ctx["timezone"]
+) -> dict[str, Any]:
+    base_ctx = await _base_context(request)
+    display_tz = base_ctx["timezone"]
+    tenant_id = base_ctx["active_fleet"].fleet_id
     as_of_dt = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
     if as_of_dt.tzinfo is None:
         as_of_dt = as_of_dt.replace(tzinfo=ZoneInfo("UTC"))
 
-    tenant_id = settings.GEOTAB_DATABASE
     lookback = settings.WEEKLY_CYCLE_DAYS + 3
     cutoff = as_of_dt - timedelta(days=lookback)
     stmt = (
@@ -609,7 +653,7 @@ async def _alert_detail_page_context(
     return {
         "detail": detail_json,
         "timezone": display_tz,
-        "tz_abbrev": tz_ctx["tz_abbrev"],
+        "tz_abbrev": base_ctx["tz_abbrev"],
         "as_of_query": as_of_dt.isoformat(),
         "query": {
             "as_of": as_of_dt.isoformat(),
@@ -619,7 +663,7 @@ async def _alert_detail_page_context(
             "severity": severity,
             "rule_ref": rule_ref,
         },
-        **tz_ctx,
+        **base_ctx,
     }
 
 
@@ -628,12 +672,15 @@ async def _build_route_context(
     driver_id: str,
     local_date: date,
     display_tz: str,
-) -> Dict[str, Any]:
+    tenant_id: str,
+) -> dict[str, Any]:
     """Build day route payload for UI partial / full page."""
-    day = await _build_driver_day(session, driver_id, local_date, display_tz=display_tz)
+    day = await _build_driver_day(
+        session, driver_id, local_date, tenant_id, display_tz=display_tz
+    )
     repo = IngestionRepository(session)
     crumbs = await repo.get_gps_breadcrumbs_for_driver_day_route(
-        tenant_id=settings.GEOTAB_DATABASE,
+        tenant_id=tenant_id,
         driver_id=driver_id,
         start_utc=day.day_start_utc,
         end_utc=day.day_end_utc,
@@ -675,18 +722,21 @@ async def _build_route_context(
 async def ui_route_map_detail(
     request: Request,
     driver_id: str,
-    date_str: Optional[str] = Query(default=None, alias="date"),
+    date_str: str | None = Query(default=None, alias="date"),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     """HTMX fragment: route map drawer body."""
-    tz_ctx = _tz_context(request)
-    display_tz = tz_ctx["timezone"]
+    base_ctx = await _base_context(request)
+    display_tz = base_ctx["timezone"]
+    tenant_id = base_ctx["active_fleet"].fleet_id
     local_date = _parse_date(date_str, display_tz)
-    ctx = await _build_route_context(session, driver_id, local_date, display_tz)
+    ctx = await _build_route_context(
+        session, driver_id, local_date, display_tz, tenant_id
+    )
     return templates.TemplateResponse(
         request,
         "partials/route_map_detail.html",
-        {**ctx, **tz_ctx, "full_page": False},
+        {**ctx, **base_ctx, "full_page": False},
     )
 
 
@@ -694,21 +744,24 @@ async def ui_route_map_detail(
 async def ui_route_map_page(
     request: Request,
     driver_id: str,
-    date_str: Optional[str] = Query(default=None, alias="date"),
+    date_str: str | None = Query(default=None, alias="date"),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     """Full-page route map view (same content as the drawer)."""
-    tz_ctx = _tz_context(request)
-    display_tz = tz_ctx["timezone"]
+    base_ctx = await _base_context(request)
+    display_tz = base_ctx["timezone"]
+    tenant_id = base_ctx["active_fleet"].fleet_id
     local_date = _parse_date(date_str, display_tz)
-    ctx = await _build_route_context(session, driver_id, local_date, display_tz)
+    ctx = await _build_route_context(
+        session, driver_id, local_date, display_tz, tenant_id
+    )
     health = await _health_context(session)
     return templates.TemplateResponse(
         request,
         "route_map_page.html",
         {
             **ctx,
-            **tz_ctx,
+            **base_ctx,
             "full_page": True,
             "health": health,
             "alert_dry_run": settings.ALERT_DRY_RUN,
@@ -788,7 +841,7 @@ async def ui_alert_detail_page(
     )
 
 
-async def _health_context(session: AsyncSession) -> Dict[str, Any]:
+async def _health_context(session: AsyncSession) -> dict[str, Any]:
     db_status = "unknown"
     redis_status = "unknown"
     try:
@@ -824,7 +877,7 @@ _LOG_FILTERS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _normalize_log_filter(value: Optional[str]) -> LogFilter:
+def _normalize_log_filter(value: str | None) -> LogFilter:
     allowed = {key for key, _ in _LOG_FILTERS}
     if value and value in allowed:
         return value  # type: ignore[return-value]
@@ -833,16 +886,18 @@ def _normalize_log_filter(value: Optional[str]) -> LogFilter:
 
 async def _build_logs_context(
     session: AsyncSession,
+    request: Request,
     *,
     source: LogFilter,
     limit: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Assemble health + merged activity rows for the Logs page / partial."""
     ops_rows = rows_from_ops(limit=150)
     alert_rows = rows_from_alerts(limit=50)
-    feed_resp = await get_recent_ingestion(limit=40, session=session)
+    feed_resp = await get_recent_ingestion(request=request, limit=40, session=session)
     ingestion_rows = rows_from_ingestion(list(feed_resp.events))
     audit_resp = await list_audit_records(
+        request=request,
         driver_id=None,
         limit=40,
         offset=0,
@@ -885,20 +940,20 @@ async def _build_logs_context(
 @ui_router.get("/ui/logs", response_class=HTMLResponse)
 async def ui_logs(
     request: Request,
-    source: Optional[str] = Query(default="all"),
+    source: str | None = Query(default="all"),
     limit: int = Query(default=100, ge=1, le=300),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     """Ops Logs: service health + live pipeline activity feed."""
-    tz_ctx = _tz_context(request)
+    base_ctx = await _base_context(request)
     filt = _normalize_log_filter(source)
-    ctx = await _build_logs_context(session, source=filt, limit=limit)
+    ctx = await _build_logs_context(session, request, source=filt, limit=limit)
     return templates.TemplateResponse(
         request,
         "logs.html",
         {
             **ctx,
-            **tz_ctx,
+            **base_ctx,
             "alert_dry_run": settings.ALERT_DRY_RUN,
             "rule_pack_version": settings.DEFAULT_RULE_PACK_VERSION,
             "current_path": str(request.url.path),
@@ -909,20 +964,20 @@ async def ui_logs(
 @ui_router.get("/ui/logs/partial", response_class=HTMLResponse)
 async def ui_logs_partial(
     request: Request,
-    source: Optional[str] = Query(default="all"),
+    source: str | None = Query(default="all"),
     limit: int = Query(default=100, ge=1, le=300),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     """HTMX partial: refreshable Logs health strip + activity table body."""
-    tz_ctx = _tz_context(request)
+    base_ctx = await _base_context(request)
     filt = _normalize_log_filter(source)
-    ctx = await _build_logs_context(session, source=filt, limit=limit)
+    ctx = await _build_logs_context(session, request, source=filt, limit=limit)
     return templates.TemplateResponse(
         request,
         "partials/logs_feed.html",
         {
             **ctx,
-            **tz_ctx,
+            **base_ctx,
         },
     )
 
@@ -931,9 +986,9 @@ async def _available_local_dates(
     session: AsyncSession,
     driver_id: str,
     display_tz: str,
+    tenant_id: str,
 ) -> list[str]:
     """Return distinct local dates that have HOS activity for the driver."""
-    tenant_id = settings.GEOTAB_DATABASE
     stmt = (
         select(CanonicalHOSLogRecord.event_timestamp)
         .where(

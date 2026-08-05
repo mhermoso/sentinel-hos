@@ -99,7 +99,7 @@ async def reseed(path: Path, tenant_id: str) -> int:
         repo = IngestionRepository(session)
         inserted = await repo.persist_canonical_logs(logs)
         driver_ids = {log.driver_id for log in logs}
-        await IngestionRepository.update_active_drivers(driver_ids)
+        await IngestionRepository.update_active_drivers(tenant_id, driver_ids)
         await session.commit()
         logger.info(
             "Re-seeded %d rows (%d drivers) for tenant=%s from %s",

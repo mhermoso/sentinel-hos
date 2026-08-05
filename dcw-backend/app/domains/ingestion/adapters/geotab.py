@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import mygeotab
 from pydantic import ValidationError
@@ -37,8 +37,8 @@ logger = logging.getLogger("dcw.adapters.geotab")
 
 
 def _map_geotab_status(
-    status_str: Optional[str],
-    origin: Optional[str],
+    status_str: str | None,
+    origin: str | None,
 ) -> CanonicalDutyStatus:
     """Map Geotab status + origin strings to canonical duty status.
 
@@ -78,14 +78,14 @@ def _map_geotab_status(
     return CanonicalDutyStatus.UNKNOWN
 
 
-def _extract_location(raw_log: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
+def _extract_location(raw_log: dict[str, Any]) -> tuple[float | None, float | None]:
     """Extract latitude/longitude from Geotab's quirky location structure.
 
     Geotab geometry: x is Longitude, y is Latitude.
     """
     location = raw_log.get("location")
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    latitude: float | None = None
+    longitude: float | None = None
     if isinstance(location, dict):
         # Handle nested {"location": {"x": ..., "y": ...}} structure
         if "location" in location and isinstance(location["location"], dict):
@@ -97,7 +97,7 @@ def _extract_location(raw_log: Dict[str, Any]) -> Tuple[Optional[float], Optiona
     return latitude, longitude
 
 
-def _extract_driver_id(raw_log: Dict[str, Any]) -> str:
+def _extract_driver_id(raw_log: dict[str, Any]) -> str:
     """Resolve driver ID from Geotab DutyStatusLog (dict ref, string ref, or device fallback)."""
     driver_ref = raw_log.get("driver")
     if isinstance(driver_ref, dict) and driver_ref.get("id"):
@@ -113,9 +113,9 @@ def _extract_driver_id(raw_log: Dict[str, Any]) -> str:
 
 
 def map_geotab_log_to_canonical(
-    raw_log: Dict[str, Any],
+    raw_log: dict[str, Any],
     tenant_id: str,
-    driver_name: Optional[str] = None,
+    driver_name: str | None = None,
 ) -> DCWCanonicalHOSLog:
     """Map a raw MyGeotab DutyStatusLog dict to a DCWCanonicalHOSLog model.
 
@@ -142,13 +142,13 @@ def map_geotab_log_to_canonical(
 
     # Comment / Annotation sanitization
     comment = raw_log.get("comment")
-    annotation: Optional[str] = None
+    annotation: str | None = None
     if comment and isinstance(comment, str):
         annotation = comment.strip()[:500]
 
     # Odometer: Geotab DutyStatusLog.odometer is meters. Stored in the
     # legacy column/field ``odometer_km`` (name is historical; value is meters).
-    odometer: Optional[float] = None
+    odometer: float | None = None
     if "odometer" in raw_log and isinstance(raw_log["odometer"], (int, float)):
         odometer = float(raw_log["odometer"])
 
@@ -170,7 +170,7 @@ def map_geotab_log_to_canonical(
     )
 
 
-def _extract_log_record_device_id(raw: Dict[str, Any]) -> Optional[str]:
+def _extract_log_record_device_id(raw: dict[str, Any]) -> str | None:
     """Extract device id from a Geotab LogRecord."""
     device = raw.get("device")
     if isinstance(device, dict) and device.get("id"):
@@ -181,8 +181,8 @@ def _extract_log_record_device_id(raw: Dict[str, Any]) -> Optional[str]:
 
 
 def _extract_log_record_lat_lon(
-    raw: Dict[str, Any],
-) -> Tuple[Optional[float], Optional[float]]:
+    raw: dict[str, Any],
+) -> tuple[float | None, float | None]:
     """Extract lat/lon from LogRecord (top-level y/x or nested location)."""
     lat = raw.get("latitude", raw.get("y"))
     lon = raw.get("longitude", raw.get("x"))
@@ -195,7 +195,7 @@ def _extract_log_record_lat_lon(
 
 
 def map_geotab_log_record_to_breadcrumb(
-    raw: Dict[str, Any],
+    raw: dict[str, Any],
     tenant_id: str,
     driver_id: str,
 ) -> DCWGpsBreadcrumb:
@@ -247,8 +247,8 @@ class GeotabAdapter(BaseTelematicsAdapter):
     provider_name = "geotab"
 
     def __init__(self) -> None:
-        self.api: Optional[mygeotab.API] = None
-        self._driver_names: Dict[str, str] = {}
+        self.api: mygeotab.API | None = None
+        self._driver_names: dict[str, str] = {}
 
     async def connect(self) -> None:
         """Authenticate with the MyGeotab API."""
@@ -274,7 +274,7 @@ class GeotabAdapter(BaseTelematicsAdapter):
             logger.error("MyGeotab SDK error during connect: %s", exc)
             raise
 
-    async def refresh_driver_names(self) -> Dict[str, str]:
+    async def refresh_driver_names(self) -> dict[str, str]:
         """Load id→name from MyGeotab User into the adapter cache."""
         if self.api is None:
             await self.connect()
@@ -289,7 +289,7 @@ class GeotabAdapter(BaseTelematicsAdapter):
         self,
         tenant_id: str,
         from_cursor: str,
-    ) -> Tuple[List[DCWCanonicalHOSLog], str]:
+    ) -> tuple[list[DCWCanonicalHOSLog], str]:
         """Fetch a batch of DutyStatusLog records via GetFeed API.
 
         Args:
@@ -331,7 +331,7 @@ class GeotabAdapter(BaseTelematicsAdapter):
         records = feed_response.get("result", feed_response.get("data", []))
         to_version = feed_response.get("toVersion", from_cursor)
 
-        valid_logs: List[DCWCanonicalHOSLog] = []
+        valid_logs: list[DCWCanonicalHOSLog] = []
 
         for record in records:
             record_id = record.get("id", "UNKNOWN_ID")
@@ -362,7 +362,7 @@ class GeotabAdapter(BaseTelematicsAdapter):
         self,
         tenant_id: str,
         from_cursor: str,
-    ) -> Tuple[List[Dict[str, Any]], str]:
+    ) -> tuple[list[dict[str, Any]], str]:
         """Fetch a batch of raw LogRecord dicts via GetFeed.
 
         Returns raw records (not breadcrumbs) so the poller can resolve

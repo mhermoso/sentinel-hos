@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Mapping, Optional, Sequence
 
 from app.domains.engine.packs.base import RulePackModule
 from app.domains.engine.packs.fmcsa_us_property import fmcsa_us_property_pack
@@ -34,7 +34,7 @@ PACK_BY_RULESET: Mapping[RulesetId, RulePackModule] = {
 
 def select_ruleset(
     profile: DriverProfile,
-    exemption_ok: Optional[bool] = None,
+    exemption_ok: bool | None = None,
 ) -> RulesetId:
     """Select Ruleset A/B/C/D from driver profile (PDF §2 daily decision).
 
@@ -66,14 +66,14 @@ def evaluate_with_router(
     *,
     version: str,
     weekly_duty_seconds: float = 0.0,
-    as_of: Optional[datetime] = None,
-    profile: Optional[DriverProfile] = None,
-    exemption_ok: Optional[bool] = None,
-    gps_fixes: Optional[Sequence[GpsFix]] = None,
+    as_of: datetime | None = None,
+    profile: DriverProfile | None = None,
+    exemption_ok: bool | None = None,
+    gps_fixes: Sequence[GpsFix] | None = None,
     short_haul_failure_days_30: int = 0,
-    day_annotations: Optional[DayAnnotations] = None,
-    adverse_driving: Optional[bool] = None,
-    sixteen_hour_exception: Optional[bool] = None,
+    day_annotations: DayAnnotations | None = None,
+    adverse_driving: bool | None = None,
+    sixteen_hour_exception: bool | None = None,
 ) -> ComplianceResult:
     """Resolve profile → ruleset → pack module and evaluate."""
     resolved = profile or default_driver_profile(

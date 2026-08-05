@@ -27,9 +27,13 @@ class BaseTelematicsAdapter(ABC):
 |----------|------|--------|
 | Geotab | `geotab.py` | Implemented (DutyStatusLog + LogRecord GPS; live + history) |
 | Motive | `motive.py` | Stub (`NotImplementedError`) |
-| Samsara | `samsara.py` | Stub (`NotImplementedError`) |
+| Samsara | `samsara.py` | Implemented (HOS watermark + GPS vehicle-stats feed; live + history) |
 
 Map provider HOS payloads to `DCWCanonicalHOSLog` and GPS to `DCWGpsBreadcrumb` (ADR-007) inside the adapter. Do not add new code to root `geotab_ingestor.py` — use `dcw-backend/`.
+
+## Fleet registry
+
+Each telematics API connection is a **Fleet** (`fleets` table / `fleets.py`). `fleet_id` is the `tenant_id` partition key. Env bootstrap: Geotab when `GEOTAB_*` set; Samsara when `SAMSARA_API_TOKEN` set.
 
 ## Normalization (ADR-003)
 
@@ -47,11 +51,25 @@ Zero-Order Hold (ZOH) forward-fill across gaps is specified in `end-to-end.md` b
 - Compute SHA-256 digest over normalized inputs via `app/core/security.py` before writing
 - Append to `canonical_hos_logs` and `gps_breadcrumbs` only — never update or delete
 - Store raw provider JSONB alongside canonical fields
-- Update Redis: active driver set, polling cursors (`cursor:{provider}:{tenant_id}`)
-- GPS LogRecord cursor: `cursor:geotab-logrecord:{tenant_id}` (separate from DutyStatusLog)
+- Update Redis per fleet: active driver set, polling cursors
+
+### Redis key patterns
+
+```
+cursor:{provider}:{fleet_id}           # HOS poll cursor/watermark
+cursor:geotab-logrecord:{fleet_id}     # Geotab GPS LogRecord cursor
+cursor:samsara-gps:{fleet_id}          # Samsara GPS feed endCursor
+set:active_drivers:{fleet_id}          # Drivers to sweep (per fleet)
+hash:driver_names:{fleet_id}           # Display names
+bootstrap:*:{fleet_id}                 # One-shot backfill guards
+alert_lock:{fleet_id}:…                # Notifier suppression
+```
+
+Legacy global `set:active_drivers` is migrated once on worker startup into `set:active_drivers:{GEOTAB_DATABASE}`.
 
 ## Background Worker
 
 - ARQ worker config: `WorkerSettings` in `poller.py`
-- Cron: `poll_geotab_feed`, `poll_geotab_log_records` (~2 min), `sweep_active_drivers` for compliance
-- Use httpx / mygeotab connection pooling for provider HTTP calls
+- Cron stagger: Geotab HOS `:00`, Geotab GPS `:15`, sweeper `:30`, Samsara HOS `:45`, Samsara GPS `:50`
+- Sweeper iterates `list_enabled_fleets()` and evaluates each fleet's `set:active_drivers:{fleet_id}` independently
+- Use httpx / mygeotab / `samsara-api` SDK connection pooling for provider HTTP calls

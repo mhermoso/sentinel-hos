@@ -118,7 +118,7 @@ async def persist_logs(logs: List[DCWCanonicalHOSLog]) -> int:
         repo = IngestionRepository(session)
         inserted = await repo.persist_canonical_logs(logs)
         driver_ids = {log.driver_id for log in logs}
-        await IngestionRepository.update_active_drivers(driver_ids)
+        await IngestionRepository.update_active_drivers(settings.GEOTAB_DATABASE, driver_ids)
         await session.commit()
         return inserted
 

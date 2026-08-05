@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import List
 
 from app.domains.engine.calculators import (
     WARNING_THRESHOLD_SECONDS,
@@ -43,13 +42,13 @@ TX_RULE_REF_WEEKLY = "37 TAC §4.12 (70h/7d)"
 def check_tx_driving_limit(
     state: TxStateMachineResult,
     now: datetime,
-) -> tuple[float, List[Violation]]:
+) -> tuple[float, list[Violation]]:
     """12h driving after 8 consecutive hours off. Overage → CRITICAL (OOS)."""
     driven = (
         state.current_shift.cumulative_driving_seconds if state.current_shift else 0.0
     )
     remaining = max(0.0, TX_MAX_DRIVING_SECONDS - driven)
-    violations: List[Violation] = []
+    violations: list[Violation] = []
 
     if driven >= TX_MAX_DRIVING_SECONDS:
         overage = driven - TX_MAX_DRIVING_SECONDS
@@ -86,11 +85,11 @@ def check_tx_driving_limit(
 def check_tx_duty_limit(
     state: TxStateMachineResult,
     now: datetime,
-) -> tuple[float, List[Violation]]:
+) -> tuple[float, list[Violation]]:
     """15h accumulated ON+D(+YM). Violation only while Driving after 15h. OOS → CRITICAL."""
     accumulated = state.accumulated_duty_seconds
     remaining = max(0.0, TX_MAX_DUTY_SECONDS - accumulated)
-    violations: List[Violation] = []
+    violations: list[Violation] = []
     driving = state.is_currently_driving
 
     if accumulated >= TX_MAX_DUTY_SECONDS and driving:
@@ -129,13 +128,13 @@ def check_tx_duty_limit(
 def check_tx_weekly_cycle(
     weekly_duty_seconds: float,
     now: datetime,
-) -> tuple[float, float, List[Violation]]:
+) -> tuple[float, float, list[Violation]]:
     """70h / 7-day cycle only (no 60/7 option)."""
     hours_used = weekly_duty_seconds / 3600.0
     hours_remaining = max(
         0.0, (TX_WEEKLY_LIMIT_SECONDS - weekly_duty_seconds) / 3600.0
     )
-    violations: List[Violation] = []
+    violations: list[Violation] = []
     warn_used = TX_WEEKLY_LIMIT_SECONDS * WEEKLY_WARNING_USED_FRACTION
 
     if weekly_duty_seconds >= TX_WEEKLY_LIMIT_SECONDS:

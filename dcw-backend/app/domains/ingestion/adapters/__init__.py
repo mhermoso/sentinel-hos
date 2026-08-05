@@ -31,7 +31,7 @@ class BaseTelematicsAdapter(ABC):
         self,
         tenant_id: str,
         from_cursor: str,
-    ) -> Tuple[List[DCWCanonicalHOSLog], str]:
+    ) -> tuple[list[DCWCanonicalHOSLog], str]:
         """Fetch a batch of HOS records starting from ``from_cursor``.
 
         Returns:

@@ -21,6 +21,10 @@ data:
   REDIS_URL: redis://dcw-redis:6379/0
   DEFAULT_RULE_PACK_VERSION: fmcsa-us-property@2.5.0
   POLL_INTERVAL_SECONDS: "120"
+  SAMSARA_FLEET_ID: ""
+  SAMSARA_API_BASE: https://api.samsara.com
+  SAMSARA_HISTORY_BACKFILL_DAYS: "10"
+  SAMSARA_RESCAN_HOURS: "24"
 ---
 apiVersion: v1
 kind: Secret
@@ -34,6 +38,7 @@ stringData:
   GEOTAB_DATABASE: ""
   GEOTAB_USERNAME: ""
   GEOTAB_PASSWORD: ""
+  SAMSARA_API_TOKEN: ""
   TWILIO_ACCOUNT_SID: ""
   TWILIO_AUTH_TOKEN: ""
   TWILIO_API_KEY_SID: ""
@@ -127,6 +132,11 @@ spec:
             secretKeyRef:
               name: dcw-secrets
               key: GEOTAB_PASSWORD
+        - name: SAMSARA_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: SAMSARA_API_TOKEN
         - name: TWILIO_ACCOUNT_SID
           valueFrom:
             secretKeyRef:
@@ -191,6 +201,11 @@ spec:
             secretKeyRef:
               name: dcw-secrets
               key: GEOTAB_PASSWORD
+        - name: SAMSARA_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: dcw-secrets
+              key: SAMSARA_API_TOKEN
 
   volumes:
     - name: pgdata

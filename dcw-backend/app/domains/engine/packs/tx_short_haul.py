@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import List, Optional, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from app.domains.engine.geo import (
     RETURN_RADIUS_AIR_MILES,
@@ -113,8 +113,7 @@ def assess_tx_short_haul_exemption(
     max_radius = 0.0
     for fix in window_fixes:
         dist = distance_from_origin_air_miles(origin, fix.latitude, fix.longitude)
-        if dist > max_radius:
-            max_radius = dist
+        max_radius = max(max_radius, dist)
         if dist > SHORT_HAUL_RADIUS_AIR_MILES:
             return ExemptionAssessment(
                 ok=False,
@@ -241,20 +240,20 @@ class TxShortHaulPack:
         *,
         version: str,
         weekly_duty_seconds: float = 0.0,
-        as_of: Optional[datetime] = None,
+        as_of: datetime | None = None,
         profile: DriverProfile,
-        gps_fixes: Optional[Sequence[GpsFix]] = None,
+        gps_fixes: Sequence[GpsFix] | None = None,
         short_haul_failure_days_30: int = 0,
-        day_annotations: Optional[DayAnnotations] = None,
-        adverse_driving: Optional[bool] = None,
-        sixteen_hour_exception: Optional[bool] = None,
+        day_annotations: DayAnnotations | None = None,
+        adverse_driving: bool | None = None,
+        sixteen_hour_exception: bool | None = None,
     ) -> ComplianceResult:
         del short_haul_failure_days_30  # federal 8-in-30; not a TX D requirement
-        now = as_of if as_of is not None else datetime.now(timezone.utc)
+        now = as_of if as_of is not None else datetime.now(UTC)
         if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
+            now = now.replace(tzinfo=UTC)
         else:
-            now = now.astimezone(timezone.utc)
+            now = now.astimezone(UTC)
 
         pack_version = version if version.startswith("tx-") else PACK_VERSION
         eval_timeline = (
@@ -285,7 +284,7 @@ class TxShortHaulPack:
             as_of=now,
         )
 
-        extra: List[Violation] = []
+        extra: list[Violation] = []
         if not assessment.ok:
             # RODS relief only while exemption holds; on fail → full C + findings.
             extra = tx_exemption_findings(assessment, now=now)

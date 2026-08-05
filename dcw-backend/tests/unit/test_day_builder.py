@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 from app.domains.dashboard.day_builder import (
@@ -19,18 +19,18 @@ from app.domains.dashboard.day_builder import (
 
 def test_chicago_day_bounds_dst_safe() -> None:
     bounds = chicago_day_bounds(date(2025, 7, 28), ZoneInfo("America/Chicago"))
-    assert bounds.start_utc == datetime(2025, 7, 28, 5, 0, tzinfo=timezone.utc)
-    assert bounds.end_utc == datetime(2025, 7, 29, 5, 0, tzinfo=timezone.utc)
+    assert bounds.start_utc == datetime(2025, 7, 28, 5, 0, tzinfo=UTC)
+    assert bounds.end_utc == datetime(2025, 7, 29, 5, 0, tzinfo=UTC)
 
 
 def test_carry_forward_and_unknown_does_not_interrupt() -> None:
     """Geotab non-status logs (UNKNOWN) must not steal time from prior duty."""
     bounds = chicago_day_bounds(date(2025, 7, 28), ZoneInfo("America/Chicago"))
     events = [
-        RawHOSEvent("OFF", datetime(2025, 7, 27, 20, 0, tzinfo=timezone.utc)),
-        RawHOSEvent("D", datetime(2025, 7, 28, 14, 0, tzinfo=timezone.utc)),  # 9 AM CT
-        RawHOSEvent("UNKNOWN", datetime(2025, 7, 28, 16, 0, tzinfo=timezone.utc)),
-        RawHOSEvent("ON", datetime(2025, 7, 28, 18, 0, tzinfo=timezone.utc)),
+        RawHOSEvent("OFF", datetime(2025, 7, 27, 20, 0, tzinfo=UTC)),
+        RawHOSEvent("D", datetime(2025, 7, 28, 14, 0, tzinfo=UTC)),  # 9 AM CT
+        RawHOSEvent("UNKNOWN", datetime(2025, 7, 28, 16, 0, tzinfo=UTC)),
+        RawHOSEvent("ON", datetime(2025, 7, 28, 18, 0, tzinfo=UTC)),
     ]
     grid, totals, carry = build_day_points(events, bounds)
     assert carry == "OFF"
@@ -50,9 +50,9 @@ def test_carry_forward_and_unknown_does_not_interrupt() -> None:
 def test_unknown_carry_skipped_when_prior_duty_exists() -> None:
     bounds = chicago_day_bounds(date(2025, 7, 28), ZoneInfo("America/Chicago"))
     events = [
-        RawHOSEvent("SB", datetime(2025, 7, 27, 18, 0, tzinfo=timezone.utc)),
-        RawHOSEvent("UNKNOWN", datetime(2025, 7, 27, 22, 0, tzinfo=timezone.utc)),
-        RawHOSEvent("D", datetime(2025, 7, 28, 15, 0, tzinfo=timezone.utc)),
+        RawHOSEvent("SB", datetime(2025, 7, 27, 18, 0, tzinfo=UTC)),
+        RawHOSEvent("UNKNOWN", datetime(2025, 7, 27, 22, 0, tzinfo=UTC)),
+        RawHOSEvent("D", datetime(2025, 7, 28, 15, 0, tzinfo=UTC)),
     ]
     _grid, totals, carry = build_day_points(events, bounds)
     assert carry == "SB"
@@ -63,10 +63,10 @@ def test_unknown_carry_skipped_when_prior_duty_exists() -> None:
 def test_pc_and_ym_emitted_with_lanes_and_totals() -> None:
     bounds = chicago_day_bounds(date(2025, 7, 28), ZoneInfo("America/Chicago"))
     events = [
-        RawHOSEvent("PC", datetime(2025, 7, 28, 6, 0, tzinfo=timezone.utc)),  # 1 AM CT
-        RawHOSEvent("D", datetime(2025, 7, 28, 12, 0, tzinfo=timezone.utc)),  # 7 AM CT
-        RawHOSEvent("YM", datetime(2025, 7, 28, 14, 0, tzinfo=timezone.utc)),  # 9 AM CT
-        RawHOSEvent("OFF", datetime(2025, 7, 28, 15, 0, tzinfo=timezone.utc)),
+        RawHOSEvent("PC", datetime(2025, 7, 28, 6, 0, tzinfo=UTC)),  # 1 AM CT
+        RawHOSEvent("D", datetime(2025, 7, 28, 12, 0, tzinfo=UTC)),  # 7 AM CT
+        RawHOSEvent("YM", datetime(2025, 7, 28, 14, 0, tzinfo=UTC)),  # 9 AM CT
+        RawHOSEvent("OFF", datetime(2025, 7, 28, 15, 0, tzinfo=UTC)),
     ]
     grid, totals, _carry = build_day_points(events, bounds)
     by_status = {e["status"]: e for e in grid}
@@ -86,12 +86,12 @@ def test_odometer_distance_on_segments() -> None:
     events = [
         RawHOSEvent(
             "D",
-            datetime(2025, 7, 28, 12, 0, tzinfo=timezone.utc),
+            datetime(2025, 7, 28, 12, 0, tzinfo=UTC),
             odometer_m=10_000.0,
         ),
         RawHOSEvent(
             "OFF",
-            datetime(2025, 7, 28, 14, 0, tzinfo=timezone.utc),
+            datetime(2025, 7, 28, 14, 0, tzinfo=UTC),
             odometer_m=26_093.44,  # +10 miles
         ),
     ]
@@ -116,7 +116,7 @@ def test_continued_segment_clips_overnight_odometer() -> None:
     events = [
         RawHOSEvent(
             "D",
-            datetime(2026, 7, 30, 4, 2, 57, tzinfo=timezone.utc),
+            datetime(2026, 7, 30, 4, 2, 57, tzinfo=UTC),
             odometer_m=carry_odo,
             latitude=34.777,
             longitude=-92.2345,
@@ -125,7 +125,7 @@ def test_continued_segment_clips_overnight_odometer() -> None:
         ),
         RawHOSEvent(
             "D",
-            datetime(2026, 7, 30, 5, 2, 57, tzinfo=timezone.utc),
+            datetime(2026, 7, 30, 5, 2, 57, tzinfo=UTC),
             odometer_m=next_odo,
             latitude=35.4523,
             longitude=-91.4082,
@@ -151,7 +151,7 @@ def test_activity_log_fields_and_continued() -> None:
     events = [
         RawHOSEvent(
             "OFF",
-            datetime(2025, 7, 27, 20, 0, tzinfo=timezone.utc),
+            datetime(2025, 7, 27, 20, 0, tzinfo=UTC),
             device_id="b1",
             annotation="yard",
             latitude=41.8,
@@ -160,7 +160,7 @@ def test_activity_log_fields_and_continued() -> None:
         ),
         RawHOSEvent(
             "D",
-            datetime(2025, 7, 28, 14, 0, tzinfo=timezone.utc),
+            datetime(2025, 7, 28, 14, 0, tzinfo=UTC),
             device_id="b1",
             latitude=41.9,
             longitude=-87.7,
@@ -187,13 +187,13 @@ def test_activity_log_fields_and_continued() -> None:
 def test_attach_alerts_to_segments_by_as_of() -> None:
     bounds = chicago_day_bounds(date(2025, 7, 28), ZoneInfo("America/Chicago"))
     events = [
-        RawHOSEvent("D", datetime(2025, 7, 28, 12, 0, tzinfo=timezone.utc)),
-        RawHOSEvent("OFF", datetime(2025, 7, 28, 16, 0, tzinfo=timezone.utc)),
+        RawHOSEvent("D", datetime(2025, 7, 28, 12, 0, tzinfo=UTC)),
+        RawHOSEvent("OFF", datetime(2025, 7, 28, 16, 0, tzinfo=UTC)),
     ]
     grid, _totals, _carry = build_day_points(events, bounds)
     markers = [
         {
-            "as_of": datetime(2025, 7, 28, 13, 30, tzinfo=timezone.utc),
+            "as_of": datetime(2025, 7, 28, 13, 30, tzinfo=UTC),
             "violation_type": "DRIVING_LIMIT",
             "severity": "WARNING",
             "rule_ref": "§ 395.3(a)(3)",
@@ -201,7 +201,7 @@ def test_attach_alerts_to_segments_by_as_of() -> None:
             "source": "backtest",
         },
         {
-            "as_of": datetime(2025, 7, 28, 17, 0, tzinfo=timezone.utc),
+            "as_of": datetime(2025, 7, 28, 17, 0, tzinfo=UTC),
             "violation_type": "DUTY_WINDOW",
             "severity": "VIOLATION",
             "rule_ref": "§ 395.3(a)(2)",
@@ -219,7 +219,7 @@ def test_attach_alerts_to_segments_by_as_of() -> None:
 
 
 def test_merge_alert_markers_dedupes() -> None:
-    as_of = datetime(2025, 7, 28, 15, 0, tzinfo=timezone.utc)
+    as_of = datetime(2025, 7, 28, 15, 0, tzinfo=UTC)
     a = {
         "as_of": as_of,
         "violation_type": "DRIVING_LIMIT",
@@ -250,8 +250,8 @@ def test_merge_alert_markers_dedupes() -> None:
             },
         ],
         "d1",
-        datetime(2025, 7, 28, 5, 0, tzinfo=timezone.utc),
-        datetime(2025, 7, 29, 5, 0, tzinfo=timezone.utc),
+        datetime(2025, 7, 28, 5, 0, tzinfo=UTC),
+        datetime(2025, 7, 29, 5, 0, tzinfo=UTC),
     )
     assert len(filtered) == 1
     assert filtered[0]["violation_type"] == "WEEKLY_CYCLE"

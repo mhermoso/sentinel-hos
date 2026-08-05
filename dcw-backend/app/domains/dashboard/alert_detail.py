@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.core.config import settings
@@ -31,8 +32,8 @@ RESTART_SECONDS = 34 * 3600.0
 
 def _ensure_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _hours(seconds: float) -> float:
@@ -47,7 +48,7 @@ def _match_violation(
     violations: Sequence[Violation],
     violation_type: str,
     as_of: datetime,
-) -> Optional[Violation]:
+) -> Violation | None:
     typed = [v for v in violations if v.violation_type.value == violation_type]
     if not typed:
         return None
@@ -78,7 +79,7 @@ def _segment_highlighted(
     seg_end: datetime,
     *,
     violation_type: str,
-    causal_start: Optional[datetime],
+    causal_start: datetime | None,
     as_of: datetime,
 ) -> bool:
     """Mark segments that contributed to the firing rule within the causal window."""
@@ -99,7 +100,7 @@ def _segment_highlighted(
 
 
 def _restart_applies_in_window(
-    reset_point: Optional[datetime],
+    reset_point: datetime | None,
     as_of: datetime,
 ) -> bool:
     """True when a valid 34h restart falls inside the rolling weekly window."""
@@ -111,10 +112,10 @@ def _restart_applies_in_window(
 
 def _build_weekly_restart_section(
     *,
-    reset_point: Optional[datetime],
+    reset_point: datetime | None,
     as_of: datetime,
     tz: ZoneInfo,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Dedicated weekly / 34h restart context for every alert type."""
     as_of = _ensure_utc(as_of)
     cycle_days = settings.WEEKLY_CYCLE_DAYS
@@ -153,10 +154,10 @@ def _build_shift_window(
     *,
     violation_type: str,
     state: Any,
-    reset_point: Optional[datetime],
+    reset_point: datetime | None,
     as_of: datetime,
     tz: ZoneInfo,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Describe the clock window used for the firing rule."""
     shift = state.current_shift
     shift_start = shift.shift_start if shift else None
@@ -205,8 +206,8 @@ def _context_events(
     before_hours: float = 6.0,
     after_hours: float = 2.0,
     violation_type: str = "",
-    causal_start: Optional[datetime] = None,
-) -> List[Dict[str, Any]]:
+    causal_start: datetime | None = None,
+) -> list[dict[str, Any]]:
     """Build zoomed OFF/SB/D/ON segments around ``as_of`` for the context graph."""
     as_of = _ensure_utc(as_of)
     window_start = as_of - timedelta(hours=before_hours)
@@ -216,8 +217,8 @@ def _context_events(
 
     sorted_events = sorted(events, key=lambda e: _ensure_utc(e.timestamp))
     # Carry status into window
-    carry: Optional[str] = None
-    in_window: List[DriverTimeline.HOSEvent] = []
+    carry: str | None = None
+    in_window: list[DriverTimeline.HOSEvent] = []
     for event in sorted_events:
         ts = _ensure_utc(event.timestamp)
         if ts < window_start:
@@ -225,7 +226,7 @@ def _context_events(
         elif ts <= window_end:
             in_window.append(event)
 
-    timeline: List[tuple[datetime, str]] = []
+    timeline: list[tuple[datetime, str]] = []
     if carry is not None:
         timeline.append((window_start, carry))
     for event in in_window:
@@ -239,7 +240,7 @@ def _context_events(
         return []
 
     span = (window_end - window_start).total_seconds() or 1.0
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for idx, (ts, status) in enumerate(timeline):
         next_ts = timeline[idx + 1][0] if idx + 1 < len(timeline) else window_end
         duration = max(0.0, (next_ts - ts).total_seconds())
@@ -276,12 +277,12 @@ def _build_explanation(
     state: Any,
     weekly_duty_seconds: float,
     weekly_limit_hours: float,
-    reset_point: Optional[datetime],
+    reset_point: datetime | None,
     as_of: datetime,
     tz: ZoneInfo,
     overage_seconds: float,
-) -> List[Dict[str, str]]:
-    steps: List[Dict[str, str]] = []
+) -> list[dict[str, str]]:
+    steps: list[dict[str, str]] = []
     shift = state.current_shift
     shift_start = shift.shift_start if shift else None
 
@@ -445,7 +446,7 @@ def build_alert_detail(
     *,
     driver_id: str,
     tenant_id: str,
-    driver_name: Optional[str],
+    driver_name: str | None,
     events: Sequence[DriverTimeline.HOSEvent],
     as_of: datetime,
     violation_type: str,
@@ -455,7 +456,7 @@ def build_alert_detail(
     severity_hint: str = "",
     rule_ref_hint: str = "",
     profile: DriverProfile | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Recompute compliance at ``as_of`` and return drawer payload dict."""
     as_of = _ensure_utc(as_of)
     tz = zoneinfo_for(display_tz_name)
@@ -535,7 +536,7 @@ def build_alert_detail(
         as_of=as_of,
         tz=tz,
     )
-    causal_start: Optional[datetime] = None
+    causal_start: datetime | None = None
     if shift_window.get("start_utc"):
         causal_start = _ensure_utc(datetime.fromisoformat(shift_window["start_utc"]))
     context = _context_events(
@@ -598,9 +599,9 @@ def build_alert_detail(
     }
 
 
-def logs_to_events(records: Sequence[Any]) -> List[DriverTimeline.HOSEvent]:
+def logs_to_events(records: Sequence[Any]) -> list[DriverTimeline.HOSEvent]:
     """Convert ORM/canonical log-like objects to timeline events."""
-    events: List[DriverTimeline.HOSEvent] = []
+    events: list[DriverTimeline.HOSEvent] = []
     for rec in records:
         status = getattr(rec, "status", None)
         ts = getattr(rec, "event_timestamp", None)

@@ -9,9 +9,9 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.config import settings
 
@@ -34,8 +34,8 @@ class OpsLogHandler(logging.Handler):
         if record.name == "dcw.ops_log":
             return
         try:
-            payload: Dict[str, Any] = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+            payload: dict[str, Any] = {
+                "timestamp": datetime.now(UTC).isoformat(),
                 "level": record.levelname,
                 "logger": record.name,
                 "message": self.format(record),
@@ -49,7 +49,7 @@ class OpsLogHandler(logging.Handler):
             self.handleError(record)
 
 
-def configure_ops_log(*, process_name: str, path: Optional[Path] = None) -> None:
+def configure_ops_log(*, process_name: str, path: Path | None = None) -> None:
     """Attach a single OpsLogHandler to the ``dcw`` logger (idempotent)."""
     dcw_logger = logging.getLogger("dcw")
     if getattr(dcw_logger, _HANDLER_ATTR, False):
@@ -65,7 +65,7 @@ def configure_ops_log(*, process_name: str, path: Optional[Path] = None) -> None
     setattr(dcw_logger, _HANDLER_ATTR, True)
 
 
-def read_ops_log(limit: int = 50, *, path: Optional[Path] = None) -> List[Dict[str, Any]]:
+def read_ops_log(limit: int = 50, *, path: Path | None = None) -> list[dict[str, Any]]:
     """Read the newest ``limit`` JSONL records. Returns newest-first."""
     if limit < 1:
         return []
@@ -80,7 +80,7 @@ def read_ops_log(limit: int = 50, *, path: Optional[Path] = None) -> List[Dict[s
         _bootstrap_logger.error("Failed to read ops log from %s: %s", log_path, exc)
         return []
 
-    records: List[Dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
     for line in reversed(lines):
         stripped = line.strip()
         if not stripped:

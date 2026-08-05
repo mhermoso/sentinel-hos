@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import List, Optional, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from app.domains.engine.calculators import (
     check_driving_limit,
@@ -50,21 +50,21 @@ class FmcsaUsPropertyPack:
         *,
         version: str,
         weekly_duty_seconds: float = 0.0,
-        as_of: Optional[datetime] = None,
+        as_of: datetime | None = None,
         profile: DriverProfile,
-        gps_fixes: Optional[Sequence[GpsFix]] = None,
+        gps_fixes: Sequence[GpsFix] | None = None,
         short_haul_failure_days_30: int = 0,
-        day_annotations: Optional[DayAnnotations] = None,
-        adverse_driving: Optional[bool] = None,
-        sixteen_hour_exception: Optional[bool] = None,
+        day_annotations: DayAnnotations | None = None,
+        adverse_driving: bool | None = None,
+        sixteen_hour_exception: bool | None = None,
     ) -> ComplianceResult:
         """Run federal HOS calculators, then Phase 6 findings."""
         del short_haul_failure_days_30  # Ruleset A does not use 8-in-30
-        now = as_of if as_of is not None else datetime.now(timezone.utc)
+        now = as_of if as_of is not None else datetime.now(UTC)
         if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
+            now = now.replace(tzinfo=UTC)
         else:
-            now = now.astimezone(timezone.utc)
+            now = now.astimezone(UTC)
 
         eval_timeline = truncate_timeline_to(timeline, now) if as_of is not None else timeline
         annotations = resolve_day_annotations(
@@ -89,7 +89,7 @@ class FmcsaUsPropertyPack:
 
         state = run_state_machine(eval_timeline)
 
-        all_violations: List[Violation] = []
+        all_violations: list[Violation] = []
 
         driving_remaining, drive_violations = check_driving_limit(
             state, now, max_driving_seconds=max_driving

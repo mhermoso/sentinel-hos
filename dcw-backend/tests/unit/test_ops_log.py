@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.core import ops_log as ops_log_mod
@@ -72,8 +72,8 @@ def test_read_ops_log_skips_bad_lines(tmp_path: Path) -> None:
 
 
 def test_merge_feed_rows_filters_and_sorts() -> None:
-    t0 = datetime(2026, 7, 31, 1, 0, tzinfo=timezone.utc)
-    t1 = datetime(2026, 7, 31, 2, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 7, 31, 1, 0, tzinfo=UTC)
+    t1 = datetime(2026, 7, 31, 2, 0, tzinfo=UTC)
     rows = merge_feed_rows(
         [
             LogFeedRow(t0, "system", "INFO", "", None, "sys"),
@@ -87,7 +87,7 @@ def test_merge_feed_rows_filters_and_sorts() -> None:
 
 
 def test_infer_worker_status_healthy_and_stale() -> None:
-    now = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 7, 31, 12, 0, tzinfo=UTC)
     fresh = LogFeedRow(
         now - timedelta(seconds=30),
         "ingestion",

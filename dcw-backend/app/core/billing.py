@@ -1,7 +1,9 @@
+from collections.abc import Callable
 from enum import Enum
-from typing import Callable
+
 from fastapi import HTTPException, status
 from pydantic import BaseModel
+
 
 class SaaSPlanTier(str, Enum):
     STARTER = "STARTER"        # $8 / truck / mo

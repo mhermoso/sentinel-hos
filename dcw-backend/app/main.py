@@ -25,6 +25,7 @@ from app.domains.dashboard.driver_names import warm_driver_name_cache
 from app.domains.dashboard.router import router as dashboard_router
 from app.domains.dashboard.ui import ui_router
 from app.domains.ingestion.adapters.geotab import GeotabAdapter
+from app.domains.ingestion.fleets import sync_fleets_to_db
 from app.domains.notifier.subscriber import run_subscriber_loop
 
 logger = logging.getLogger("dcw.main")
@@ -74,6 +75,8 @@ async def on_startup() -> None:
 
     await init_db()
     logger.info("PostgreSQL connection pool ready")
+
+    await sync_fleets_to_db()
 
     await init_redis()
     logger.info("Redis connection pool ready")

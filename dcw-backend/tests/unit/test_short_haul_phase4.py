@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -32,7 +32,7 @@ from app.domains.engine.short_haul import (
 from app.domains.engine.state_machine import run_state_machine
 from app.domains.ingestion.schemas import CanonicalDutyStatus
 
-UTC = timezone.utc
+UTC = UTC
 
 # Dallas-ish depot
 WRL = WorkReportingLocation(latitude=32.7767, longitude=-96.7970)

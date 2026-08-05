@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.core.config import settings
 from app.domains.notifier.schemas import ComplianceAlert
@@ -19,13 +19,13 @@ def log_alert_event(
     *,
     suppressed: bool,
     dispatch_action: str,
-    suppression_reason: Optional[str] = None,
-    voice_call_sid: Optional[str] = None,
-    sms_sid: Optional[str] = None,
+    suppression_reason: str | None = None,
+    voice_call_sid: str | None = None,
+    sms_sid: str | None = None,
 ) -> None:
     """Append one JSON line to the compliance alerts log file."""
-    record: Dict[str, Any] = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+    record: dict[str, Any] = {
+        "timestamp": datetime.now(UTC).isoformat(),
         "tenant_id": alert.tenant_id,
         "driver_id": alert.driver_id,
         "violation_type": alert.violation_type,
@@ -53,7 +53,7 @@ def log_alert_event(
         logger.error("Failed to write alert log to %s: %s", log_path, exc)
 
 
-def read_alert_log(limit: int = 50, *, path: Optional[Path] = None) -> List[Dict[str, Any]]:
+def read_alert_log(limit: int = 50, *, path: Path | None = None) -> list[dict[str, Any]]:
     """Read the newest ``limit`` JSONL records from the compliance alerts log.
 
     Does not place Twilio calls — file read only. Returns newest-first.
@@ -72,7 +72,7 @@ def read_alert_log(limit: int = 50, *, path: Optional[Path] = None) -> List[Dict
         logger.error("Failed to read alert log from %s: %s", log_path, exc)
         return []
 
-    records: List[Dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
     for line in reversed(lines):
         stripped = line.strip()
         if not stripped:

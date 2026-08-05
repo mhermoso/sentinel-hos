@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Dict
+from typing import Any
 
 
-def compute_inputs_hash(canonical_fields: Dict[str, Any]) -> str:
+def compute_inputs_hash(canonical_fields: dict[str, Any]) -> str:
     """Compute a SHA-256 hex digest over a deterministic JSON serialisation.
 
     Args:
@@ -33,7 +33,7 @@ def compute_inputs_hash(canonical_fields: Dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
-def hash_canonical_log(log_dict: Dict[str, Any]) -> str:
+def hash_canonical_log(log_dict: dict[str, Any]) -> str:
     """Hash the compliance-relevant fields of a canonical HOS log.
 
     Only fields that affect compliance calculations are included in
@@ -54,7 +54,7 @@ def hash_canonical_log(log_dict: Dict[str, Any]) -> str:
     return compute_inputs_hash(relevant_fields)
 
 
-def hash_gps_breadcrumb(crumb_dict: Dict[str, Any]) -> str:
+def hash_gps_breadcrumb(crumb_dict: dict[str, Any]) -> str:
     """Hash integrity-relevant fields of a GPS breadcrumb (ADR-007)."""
     relevant_fields = {
         "tenant_id": crumb_dict.get("tenant_id"),

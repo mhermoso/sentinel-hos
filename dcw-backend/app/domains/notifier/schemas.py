@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,17 +31,17 @@ class ComplianceAlert(BaseModel):
     overage_seconds: float = 0.0
 
     # Contact info — populated from tenant account at dispatch time
-    driver_phone: Optional[str] = Field(None, description="Driver mobile number")
-    dispatcher_phone: Optional[str] = Field(None, description="Safety officer number")
-    driver_name: Optional[str] = None
+    driver_phone: str | None = Field(None, description="Driver mobile number")
+    dispatcher_phone: str | None = Field(None, description="Safety officer number")
+    driver_name: str | None = None
 
 
 class AlertDispatchResult(BaseModel):
     """Outcome of a single alert dispatch attempt."""
 
     alert: ComplianceAlert
-    voice_call_sid: Optional[str] = None
-    sms_sid: Optional[str] = None
+    voice_call_sid: str | None = None
+    sms_sid: str | None = None
     suppressed: bool = False
-    suppression_reason: Optional[str] = None
+    suppression_reason: str | None = None
     dispatched_at: datetime = Field(default_factory=lambda: datetime.utcnow())

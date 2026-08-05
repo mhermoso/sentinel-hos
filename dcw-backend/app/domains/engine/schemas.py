@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -157,7 +156,7 @@ class GpsFix(BaseModel):
     latitude: float
     longitude: float
     timestamp: datetime
-    speed_kmh: Optional[float] = Field(
+    speed_kmh: float | None = Field(
         default=None,
         ge=0.0,
         description="Vehicle speed in km/h when reported (YM highway heuristic)",
@@ -192,14 +191,14 @@ class DayAnnotations(BaseModel):
     used_sixteen_hour_since_restart: bool = False
 
     # Form & manner evidence (§ 395.8) — None means "not supplied / unknown"
-    daily_certified: Optional[bool] = None
-    missing_required_fields: List[str] = Field(default_factory=list)
+    daily_certified: bool | None = None
+    missing_required_fields: list[str] = Field(default_factory=list)
     unassigned_driving_seconds: float = Field(0.0, ge=0.0)
-    log_edits: List[LogEditEvidence] = Field(default_factory=list)
+    log_edits: list[LogEditEvidence] = Field(default_factory=list)
     eld_malfunction_days: int = Field(0, ge=0)
 
     # Optional next-load lat/lon for PC "toward load" heuristic
-    next_load_location: Optional[WorkReportingLocation] = None
+    next_load_location: WorkReportingLocation | None = None
 
 
 class DriverProfile(BaseModel):
@@ -217,9 +216,9 @@ class DriverProfile(BaseModel):
         ...,
         description="IANA timezone for home-terminal day boundaries / restart checks",
     )
-    work_reporting_location: Optional[WorkReportingLocation] = None
-    vehicle_weight_class: Optional[str] = None
-    hazmat_placard: Optional[bool] = None
+    work_reporting_location: WorkReportingLocation | None = None
+    vehicle_weight_class: str | None = None
+    hazmat_placard: bool | None = None
 
     @field_validator("cycle", mode="before")
     @classmethod
@@ -261,7 +260,7 @@ class DriverTimeline(BaseModel):
 
     driver_id: str
     tenant_id: str
-    events: List["HOSEvent"] = Field(default_factory=list)
+    events: list[HOSEvent] = Field(default_factory=list)
 
     class HOSEvent(BaseModel):
         """A single HOS status event in a driver timeline."""
@@ -313,18 +312,18 @@ class ComplianceResult(BaseModel):
     )
 
     # ── Violations detected ─────────────────────────────────────────────
-    violations: List[Violation] = Field(default_factory=list)
+    violations: list[Violation] = Field(default_factory=list)
 
     # ── Ruleset router metadata (Phase 3+) ──────────────────────────────
-    selected_ruleset: Optional[RulesetId] = Field(
+    selected_ruleset: RulesetId | None = Field(
         default=None,
         description="Ruleset A/B/C/D selected by the daily router",
     )
-    ruleset_status: Optional[RulesetStatus] = Field(
+    ruleset_status: RulesetStatus | None = Field(
         default=None,
         description="IMPLEMENTED when pack evaluates clocks; NOT_IMPLEMENTED for stubs",
     )
-    ruleset_pack_id: Optional[str] = Field(
+    ruleset_pack_id: str | None = Field(
         default=None,
         description="Pack module id, e.g. fmcsa_us_property",
     )
@@ -341,7 +340,7 @@ class ComplianceResult(BaseModel):
         )
 
     @property
-    def highest_severity(self) -> Optional[ViolationSeverity]:
+    def highest_severity(self) -> ViolationSeverity | None:
         """Return the worst severity level across all active violations."""
         if not self.violations:
             return None

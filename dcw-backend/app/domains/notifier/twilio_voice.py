@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
 
 from app.core.config import settings
 from app.domains.notifier.schemas import ComplianceAlert
@@ -47,7 +46,7 @@ def _build_twiml_alert(alert: ComplianceAlert, language: str = "en") -> str:
 async def place_voice_call(
     alert: ComplianceAlert,
     to_phone: str,
-) -> Optional[str]:
+) -> str | None:
     """Initiate a Twilio Voice IVR call for the compliance alert."""
     if settings.ALERT_DRY_RUN:
         logger.info(

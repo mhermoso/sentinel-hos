@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import List, Optional, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from app.domains.engine.findings import evaluate_findings, resolve_day_annotations
 from app.domains.engine.replay import truncate_timeline_to
@@ -38,22 +38,22 @@ def evaluate_tx_intrastate(
     *,
     version: str,
     weekly_duty_seconds: float,
-    as_of: Optional[datetime],
+    as_of: datetime | None,
     profile: DriverProfile,
     selected_ruleset: RulesetId = RulesetId.C,
     pack_id: str = PACK_ID,
-    gps_fixes: Optional[Sequence[GpsFix]] = None,
-    day_annotations: Optional[DayAnnotations] = None,
-    adverse_driving: Optional[bool] = None,
-    sixteen_hour_exception: Optional[bool] = None,
+    gps_fixes: Sequence[GpsFix] | None = None,
+    day_annotations: DayAnnotations | None = None,
+    adverse_driving: bool | None = None,
+    sixteen_hour_exception: bool | None = None,
 ) -> ComplianceResult:
     """Run Texas C clocks (shared by Rulesets C and D) + Phase 6 risk findings."""
     del profile  # cycle forced to TX 70/7 in calculators
-    now = as_of if as_of is not None else datetime.now(timezone.utc)
+    now = as_of if as_of is not None else datetime.now(UTC)
     if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+        now = now.replace(tzinfo=UTC)
     else:
-        now = now.astimezone(timezone.utc)
+        now = now.astimezone(UTC)
 
     eval_timeline = truncate_timeline_to(timeline, now) if as_of is not None else timeline
     state = run_tx_state_machine(eval_timeline)
@@ -64,7 +64,7 @@ def evaluate_tx_intrastate(
     )
     fixes: Sequence[GpsFix] = gps_fixes or ()
 
-    all_violations: List[Violation] = []
+    all_violations: list[Violation] = []
 
     driving_remaining, drive_violations = check_tx_driving_limit(state, now)
     all_violations.extend(drive_violations)
@@ -123,13 +123,13 @@ class TxIntrastatePack:
         *,
         version: str,
         weekly_duty_seconds: float = 0.0,
-        as_of: Optional[datetime] = None,
+        as_of: datetime | None = None,
         profile: DriverProfile,
-        gps_fixes: Optional[Sequence[GpsFix]] = None,
+        gps_fixes: Sequence[GpsFix] | None = None,
         short_haul_failure_days_30: int = 0,
-        day_annotations: Optional[DayAnnotations] = None,
-        adverse_driving: Optional[bool] = None,
-        sixteen_hour_exception: Optional[bool] = None,
+        day_annotations: DayAnnotations | None = None,
+        adverse_driving: bool | None = None,
+        sixteen_hour_exception: bool | None = None,
     ) -> ComplianceResult:
         del short_haul_failure_days_30
         pack_version = version if version.startswith("tx-") else PACK_VERSION

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from app.core.config import settings
 from app.core.security import compute_inputs_hash
@@ -26,12 +26,12 @@ def bootstrap_backtest_key(tenant_id: str, days: int) -> str:
 
 
 def build_driver_name_map(
-    grouped: Dict[str, List[DCWCanonicalHOSLog]],
+    grouped: dict[str, list[DCWCanonicalHOSLog]],
     *,
-    redis_names: Dict[str, str] | None = None,
-) -> Dict[str, str | None]:
+    redis_names: dict[str, str] | None = None,
+) -> dict[str, str | None]:
     """Resolve driver_id → display name from logs and optional Redis cache."""
-    names: Dict[str, str | None] = {}
+    names: dict[str, str | None] = {}
     redis_names = redis_names or {}
     for driver_id, logs in grouped.items():
         driver_name: str | None = redis_names.get(driver_id)
@@ -44,7 +44,7 @@ def build_driver_name_map(
     return names
 
 
-def _evaluation_points_event(events: List[DriverTimeline.HOSEvent]) -> List[datetime]:
+def _evaluation_points_event(events: list[DriverTimeline.HOSEvent]) -> list[datetime]:
     return sorted({e.timestamp for e in events})
 
 
@@ -52,8 +52,8 @@ def _evaluation_points_sweeper(
     start: datetime,
     end: datetime,
     interval_seconds: int,
-) -> List[datetime]:
-    points: List[datetime] = []
+) -> list[datetime]:
+    points: list[datetime] = []
     cursor = start
     while cursor <= end:
         points.append(cursor)
@@ -62,29 +62,29 @@ def _evaluation_points_sweeper(
 
 
 def _shift_id(as_of: datetime) -> str:
-    return as_of.astimezone(timezone.utc).strftime("%Y%m%d")
+    return as_of.astimezone(UTC).strftime("%Y%m%d")
 
 
 def run_backtest(
-    grouped: Dict[str, List[DCWCanonicalHOSLog]],
+    grouped: dict[str, list[DCWCanonicalHOSLog]],
     mode: str,
     interval_seconds: int,
     *,
-    driver_names: Dict[str, str | None] | None = None,
-) -> Dict[str, Any]:
+    driver_names: dict[str, str | None] | None = None,
+) -> dict[str, Any]:
     """Replay HOS timelines and simulate alert-lock dispatch deduplication."""
     pack = RulePack(version=settings.DEFAULT_RULE_PACK_VERSION)
     lock = InMemoryAlertLock()
     resolved_names = driver_names or build_driver_name_map(grouped)
 
-    raw_violations: List[Dict[str, Any]] = []
-    dispatch_events: List[Dict[str, Any]] = []
+    raw_violations: list[dict[str, Any]] = []
+    dispatch_events: list[dict[str, Any]] = []
     raw_counter: Counter[str] = Counter()
     dispatch_counter: Counter[str] = Counter()
     driver_dispatch_counts: Counter[str] = Counter()
     driver_raw_counts: Counter[str] = Counter()
 
-    all_timestamps: List[datetime] = []
+    all_timestamps: list[datetime] = []
     tenant_id = settings.GEOTAB_DATABASE or "unknown"
 
     for driver_id, logs in grouped.items():
@@ -164,7 +164,7 @@ def run_backtest(
                         }
                     )
 
-    date_range: Dict[str, str] = {}
+    date_range: dict[str, str] = {}
     if all_timestamps:
         date_range = {
             "from": min(all_timestamps).isoformat(),
@@ -180,7 +180,7 @@ def run_backtest(
             "driver_count": len(grouped),
             "total_events": sum(len(v) for v in grouped.values()),
             "date_range": date_range,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
         },
         "summary": {
             "raw_violation_count": sum(raw_counter.values()),
@@ -199,7 +199,7 @@ def run_backtest(
     }
 
 
-def serialize_dispatch_payload(result: Dict[str, Any]) -> Dict[str, Any]:
+def serialize_dispatch_payload(result: dict[str, Any]) -> dict[str, Any]:
     """Build the dashboard / Redis JSON shape for would-dispatch markers."""
     return {
         "meta": result["meta"],

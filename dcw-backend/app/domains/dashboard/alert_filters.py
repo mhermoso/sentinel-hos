@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import calendar
 from datetime import date, datetime, timedelta
-from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from app.domains.dashboard.timezone import zoneinfo_for
 
 
-def normalize_filter_str(value: Optional[str]) -> Optional[str]:
+def normalize_filter_str(value: str | None) -> str | None:
     """Treat empty / whitespace / literal 'all' as no filter (None)."""
     if value is None:
         return None
@@ -20,7 +19,7 @@ def normalize_filter_str(value: Optional[str]) -> Optional[str]:
     return cleaned
 
 
-def default_alerts_local_range(display_tz: str) -> Tuple[date, date]:
+def default_alerts_local_range(display_tz: str) -> tuple[date, date]:
     """Last 30 local calendar days inclusive (today and 29 days prior)."""
     today = datetime.now(zoneinfo_for(display_tz)).date()
     return today - timedelta(days=29), today
@@ -30,7 +29,7 @@ def local_dates_to_utc_window(
     from_date: date,
     to_date: date,
     display_tz: str,
-) -> Tuple[datetime, datetime]:
+) -> tuple[datetime, datetime]:
     """Inclusive local dates → UTC [start, end) window."""
     zone = zoneinfo_for(display_tz)
     start = datetime(from_date.year, from_date.month, from_date.day, tzinfo=zone).astimezone(
@@ -42,12 +41,12 @@ def local_dates_to_utc_window(
     return start, end
 
 
-def default_alerts_utc_window(display_tz: str) -> Tuple[datetime, datetime]:
+def default_alerts_utc_window(display_tz: str) -> tuple[datetime, datetime]:
     from_d, to_d = default_alerts_local_range(display_tz)
     return local_dates_to_utc_window(from_d, to_d, display_tz)
 
 
-def quick_range_dates(key: str, display_tz: str) -> Tuple[date, date]:
+def quick_range_dates(key: str, display_tz: str) -> tuple[date, date]:
     """Return (from_date, to_date) for a quick-range chip key."""
     today = datetime.now(zoneinfo_for(display_tz)).date()
     if key == "7d":
@@ -66,7 +65,7 @@ def quick_range_dates(key: str, display_tz: str) -> Tuple[date, date]:
     return default_alerts_local_range(display_tz)
 
 
-def detect_active_range(from_date: date, to_date: date, display_tz: str) -> Optional[str]:
+def detect_active_range(from_date: date, to_date: date, display_tz: str) -> str | None:
     """Return chip key if from/to match a quick range, else None."""
     for key in ("7d", "21d", "30d", "current_month", "last_month"):
         start, end = quick_range_dates(key, display_tz)

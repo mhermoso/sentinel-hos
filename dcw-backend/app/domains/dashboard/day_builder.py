@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.core.config import settings
@@ -33,10 +34,10 @@ from app.domains.ingestion.duty_filter import should_skip_duty_status_change
 logger = logging.getLogger("dcw.dashboard.day_builder")
 
 # Duty lanes (+ UNKNOWN only if carry-in has no other status). Totals sum these.
-GRID_STATUSES: Tuple[str, ...] = ("OFF", "SB", "D", "ON", "UNKNOWN")
-EXEMPTION_STATUSES: Tuple[str, ...] = ("PC", "YM")
+GRID_STATUSES: tuple[str, ...] = ("OFF", "SB", "D", "ON", "UNKNOWN")
+EXEMPTION_STATUSES: tuple[str, ...] = ("PC", "YM")
 # Status → Y-lane for the Geotab-style grid (PC→OFF, YM→ON)
-LANE_FOR_STATUS: Dict[str, str] = {
+LANE_FOR_STATUS: dict[str, str] = {
     "OFF": "OFF",
     "SB": "SB",
     "D": "D",
@@ -68,25 +69,25 @@ class RawHOSEvent:
     status: str
     event_timestamp: datetime
     raw_id: str = ""
-    device_id: Optional[str] = None
-    annotation: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    device_id: str | None = None
+    annotation: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     # Geotab odometer in meters (stored historically as odometer_km)
-    odometer_m: Optional[float] = None
-    raw_payload: Optional[Mapping[str, Any]] = field(default=None, hash=False)
+    odometer_m: float | None = None
+    raw_payload: Mapping[str, Any] | None = field(default=None, hash=False)
 
 
 @dataclass
 class _TimelinePoint:
     ts: datetime
     status: str
-    odometer_m: Optional[float]
+    odometer_m: float | None
     origin: str = ""
-    annotation: Optional[str] = None
-    device_id: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    annotation: str | None = None
+    device_id: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     continued: bool = False
 
 
@@ -94,7 +95,7 @@ def home_terminal_tz() -> ZoneInfo:
     return ZoneInfo(settings.DEFAULT_HOME_TERMINAL_TIMEZONE)
 
 
-def chicago_day_bounds(local_date: date, tz: Optional[ZoneInfo] = None) -> DayBounds:
+def chicago_day_bounds(local_date: date, tz: ZoneInfo | None = None) -> DayBounds:
     """Convert a local calendar date to a half-open UTC window ``[00:00, 24:00)``."""
     zone = tz or home_terminal_tz()
     start_local = datetime(local_date.year, local_date.month, local_date.day, tzinfo=zone)
@@ -102,15 +103,15 @@ def chicago_day_bounds(local_date: date, tz: Optional[ZoneInfo] = None) -> DayBo
     return DayBounds(
         local_date=local_date,
         timezone=str(zone),
-        start_utc=start_local.astimezone(timezone.utc),
-        end_utc=end_local.astimezone(timezone.utc),
+        start_utc=start_local.astimezone(UTC),
+        end_utc=end_local.astimezone(UTC),
     )
 
 
 def _ensure_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def format_duration_hhmm(seconds: float) -> str:
@@ -147,10 +148,10 @@ def _event_origin(event: RawHOSEvent) -> str:
 
 
 def _location_label(
-    event: Optional[RawHOSEvent],
+    event: RawHOSEvent | None,
     *,
-    latitude: Optional[float] = None,
-    longitude: Optional[float] = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
 ) -> str:
     """Best-effort location string from Geotab payload or lat/lon."""
     payload = (event.raw_payload if event else None) or {}
@@ -174,9 +175,9 @@ def _location_label(
 
 
 def compute_status_totals(
-    points: Sequence[Tuple[datetime, str, Optional[float]]],
+    points: Sequence[tuple[datetime, str, float | None]],
     day_end: datetime,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Accumulate seconds and odometer meters per GRID status until day_end.
 
     Each point is ``(timestamp, status, odometer_m_at_start)``. Distance for a
@@ -230,8 +231,8 @@ def compute_status_totals(
 
 
 def _clip_continued_odometer_to_day_start(
-    timeline: List[_TimelinePoint],
-    carry_event: Optional[RawHOSEvent],
+    timeline: list[_TimelinePoint],
+    carry_event: RawHOSEvent | None,
 ) -> None:
     """Interpolate odometer at local midnight for carry-forward segments.
 
@@ -269,7 +270,7 @@ def _timeline_point_from_event(
     ts: datetime,
     event: RawHOSEvent,
     *,
-    odometer_m: Optional[float] = None,
+    odometer_m: float | None = None,
     continued: bool = False,
 ) -> _TimelinePoint:
     return _TimelinePoint(
@@ -288,7 +289,7 @@ def _timeline_point_from_event(
 def build_day_points(
     events: Sequence[RawHOSEvent],
     bounds: DayBounds,
-) -> Tuple[List[Dict[str, Any]], Dict[str, float], Optional[str]]:
+) -> tuple[list[dict[str, Any]], dict[str, float], str | None]:
     """Build clipped day status points with carry-forward and duration totals.
 
     Returns ``(grid_events, totals_seconds, carry_forward_status)``.
@@ -300,11 +301,11 @@ def build_day_points(
     end = bounds.end_utc
 
     sorted_events = sorted(events, key=lambda e: _ensure_utc(e.event_timestamp))
-    carry_any: Optional[str] = None
-    carry_duty: Optional[str] = None
-    carry_odo: Optional[float] = None
-    carry_event: Optional[RawHOSEvent] = None
-    day_events: List[RawHOSEvent] = []
+    carry_any: str | None = None
+    carry_duty: str | None = None
+    carry_odo: float | None = None
+    carry_event: RawHOSEvent | None = None
+    day_events: list[RawHOSEvent] = []
 
     for event in sorted_events:
         ts = _ensure_utc(event.event_timestamp)
@@ -321,7 +322,7 @@ def build_day_points(
     # Prefer last real duty status before the day (skip trailing UNKNOWN noise)
     carry = carry_duty if carry_duty is not None else carry_any
 
-    timeline: List[_TimelinePoint] = []
+    timeline: list[_TimelinePoint] = []
     if carry is not None:
         if carry_event is not None and carry_event.status == carry:
             timeline.append(
@@ -368,7 +369,7 @@ def build_day_points(
         end,
     )
 
-    grid_events: List[Dict[str, Any]] = []
+    grid_events: list[dict[str, Any]] = []
     for idx, point in enumerate(timeline):
         next_ts = timeline[idx + 1].ts if idx + 1 < len(timeline) else end
         next_odo = timeline[idx + 1].odometer_m if idx + 1 < len(timeline) else None
@@ -418,7 +419,7 @@ def build_day_points(
         )
 
     # Enrich from source events (payload address beats bare lat/lon)
-    event_by_ts: Dict[datetime, RawHOSEvent] = {}
+    event_by_ts: dict[datetime, RawHOSEvent] = {}
     for event in day_events:
         if _is_non_duty(event):
             continue
@@ -447,14 +448,14 @@ def build_day_points(
 
 
 def attach_alerts_to_segments(
-    grid_events: List[Dict[str, Any]],
-    markers: Sequence[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    grid_events: list[dict[str, Any]],
+    markers: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Attach markers whose ``as_of`` falls in ``[segment_start, segment_end)``."""
     for ev in grid_events:
         start = _ensure_utc(ev["event_timestamp"])
         end = start + timedelta(seconds=float(ev.get("duration_seconds", 0.0)))
-        alerts: List[Dict[str, Any]] = []
+        alerts: list[dict[str, Any]] = []
         for marker in markers:
             as_of = _ensure_utc(marker["as_of"])
             if start <= as_of < end:
@@ -472,7 +473,7 @@ def attach_alerts_to_segments(
     return grid_events
 
 
-def _rows_from_dispatch_payload(payload: Any) -> List[Dict[str, Any]]:
+def _rows_from_dispatch_payload(payload: Any) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
     rows = payload.get("dispatches") or payload.get("dispatch_events") or []
@@ -480,9 +481,12 @@ def _rows_from_dispatch_payload(payload: Any) -> List[Dict[str, Any]]:
 
 
 async def load_backtest_dispatches(
-    path: Optional[Path] = None,
-) -> List[Dict[str, Any]]:
-    """Load would-dispatch markers from Redis (online) or local JSON (dev fallback)."""
+    path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Load would-dispatch markers from Redis (online) or local JSON (dev fallback).
+
+    Backtest dispatches remain Geotab-fleet-only (engine seed / runner scoped).
+    """
     tenant_id = settings.GEOTAB_DATABASE
     if tenant_id:
         try:
@@ -512,7 +516,7 @@ async def load_backtest_dispatches(
     return _rows_from_dispatch_payload(payload)
 
 
-def _parse_iso_dt(value: Any) -> Optional[datetime]:
+def _parse_iso_dt(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -527,12 +531,12 @@ def _parse_iso_dt(value: Any) -> Optional[datetime]:
 
 
 def filter_backtest_markers(
-    dispatches: Iterable[Dict[str, Any]],
+    dispatches: Iterable[dict[str, Any]],
     driver_id: str,
     start_utc: datetime,
     end_utc: datetime,
-) -> List[Dict[str, Any]]:
-    markers: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    markers: list[dict[str, Any]] = []
     for row in dispatches:
         if str(row.get("driver_id", "")) != driver_id:
             continue
@@ -555,14 +559,14 @@ def filter_backtest_markers(
 
 
 def markers_from_audit_violations(
-    violations: Iterable[Dict[str, Any]],
+    violations: Iterable[dict[str, Any]],
     start_utc: datetime,
     end_utc: datetime,
     *,
     driver_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Build live markers, collapsing sweeper duplicates of the same rule/severity."""
-    markers: List[Dict[str, Any]] = []
+    markers: list[dict[str, Any]] = []
     for violation in violations:
         detected = _parse_iso_dt(violation.get("detected_at"))
         if detected is None or detected < start_utc or detected >= end_utc:
@@ -581,8 +585,8 @@ def markers_from_audit_violations(
         )
     # Keep first occurrence per (type, severity) for the day — sweeper re-publishes often
     markers.sort(key=lambda m: _ensure_utc(m["as_of"]))
-    collapsed: List[Dict[str, Any]] = []
-    seen_rule: set[Tuple[str, str]] = set()
+    collapsed: list[dict[str, Any]] = []
+    seen_rule: set[tuple[str, str]] = set()
     for marker in markers:
         key = (str(marker["violation_type"]), str(marker["severity"]))
         if key in seen_rule:
@@ -593,11 +597,11 @@ def markers_from_audit_violations(
 
 
 def merge_alert_markers(
-    *marker_groups: Sequence[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    *marker_groups: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Deduplicate markers by (type, severity, source, minute bucket) and sort."""
-    seen: set[Tuple[str, str, str, str]] = set()
-    merged: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    merged: list[dict[str, Any]] = []
     for group in marker_groups:
         for marker in group:
             as_of = _ensure_utc(marker["as_of"])
@@ -617,11 +621,11 @@ def merge_alert_markers(
 
 
 def annotate_marker_hours(
-    markers: Sequence[Dict[str, Any]],
+    markers: Sequence[dict[str, Any]],
     tz_name: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     zone = ZoneInfo(tz_name)
-    annotated: List[Dict[str, Any]] = []
+    annotated: list[dict[str, Any]] = []
     for marker in markers:
         as_of = _ensure_utc(marker["as_of"])
         local_ts = as_of.astimezone(zone)
@@ -642,17 +646,17 @@ def annotate_marker_hours(
 
 
 def collect_fleet_alerts(
-    dispatches: Iterable[Dict[str, Any]],
-    live_markers: Iterable[Dict[str, Any]],
+    dispatches: Iterable[dict[str, Any]],
+    live_markers: Iterable[dict[str, Any]],
     *,
-    severity: Optional[str] = None,
-    driver_id: Optional[str] = None,
-    source: Optional[str] = None,
-    start_utc: Optional[datetime] = None,
-    end_utc: Optional[datetime] = None,
-) -> List[Dict[str, Any]]:
+    severity: str | None = None,
+    driver_id: str | None = None,
+    source: str | None = None,
+    start_utc: datetime | None = None,
+    end_utc: datetime | None = None,
+) -> list[dict[str, Any]]:
     """Merge backtest + live markers for the fleet Alerts tab / API."""
-    backtest_rows: List[Dict[str, Any]] = []
+    backtest_rows: list[dict[str, Any]] = []
     for row in dispatches:
         as_of = _parse_iso_dt(row.get("as_of"))
         if as_of is None:
@@ -677,7 +681,7 @@ def collect_fleet_alerts(
             }
         )
 
-    live_rows: List[Dict[str, Any]] = []
+    live_rows: list[dict[str, Any]] = []
     for marker in live_markers:
         as_of = _parse_iso_dt(marker.get("as_of") or marker.get("detected_at"))
         if as_of is None:

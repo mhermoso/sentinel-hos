@@ -107,8 +107,26 @@ class Settings(BaseSettings):
     STARTER_TIER_PRICE_PER_VEHICLE: float = 8.00
     PRO_TIER_PRICE_PER_VEHICLE: float = 18.00
 
-    # ── Motive / Samsara (future) ────────────────────────────────────────
+    # ── Samsara Telematics ───────────────────────────────────────────────
     SAMSARA_API_TOKEN: str = ""
+    SAMSARA_FLEET_ID: str = Field(
+        default="",
+        description="Stable fleet/tenant id for the Samsara connection (samsara:{org_id}); derived on connect when empty",
+    )
+    SAMSARA_API_BASE: str = Field(
+        default="https://api.samsara.com",
+        description="Samsara regional API base URL (EU/CA variants supported)",
+    )
+    SAMSARA_HISTORY_BACKFILL_DAYS: int = Field(
+        default=10,
+        description="HOS lookback window for the one-shot Samsara startup backfill",
+    )
+    SAMSARA_RESCAN_HOURS: int = Field(
+        default=24,
+        description="Rolling re-fetch window per poll to capture late Samsara Driver App uploads",
+    )
+
+    # ── Motive (future) ──────────────────────────────────────────────────
     MOTIVE_API_KEY: str = ""
 
     # ── Compliance Engine ────────────────────────────────────────────────

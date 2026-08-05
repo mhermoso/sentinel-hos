@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -112,7 +111,7 @@ class EngineRepository:
             if profile.work_reporting_location
             else None
         )
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         stmt = (
             pg_insert(DriverProfileRecord)
             .values(
@@ -166,7 +165,7 @@ class EngineRepository:
         Returns:
             DriverTimeline with events ordered chronologically.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
 
         stmt = (
             select(CanonicalHOSLogRecord)
@@ -178,7 +177,12 @@ class EngineRepository:
                     [CanonicalDutyStatus.UNKNOWN.value]
                 ),
             )
-            .order_by(CanonicalHOSLogRecord.event_timestamp.asc())
+            # raw_id tie-break keeps ordering (and audit hashes) deterministic
+            # when multiple rows share one event_timestamp (e.g. edited logs).
+            .order_by(
+                CanonicalHOSLogRecord.event_timestamp.asc(),
+                CanonicalHOSLogRecord.raw_id.asc(),
+            )
         )
 
         result = await self.session.execute(stmt)
@@ -210,7 +214,7 @@ class EngineRepository:
         as_of: datetime | None = None,
     ) -> float:
         """Sum total on-duty seconds over the rolling weekly cycle window."""
-        now = as_of if as_of is not None else datetime.now(timezone.utc)
+        now = as_of if as_of is not None else datetime.now(UTC)
         lookback_days = cycle_days + WEEKLY_DUTY_LOOKBACK_BUFFER_DAYS
         cutoff = now - timedelta(days=lookback_days)
 
@@ -225,7 +229,10 @@ class EngineRepository:
                     [CanonicalDutyStatus.UNKNOWN.value]
                 ),
             )
-            .order_by(CanonicalHOSLogRecord.event_timestamp.asc())
+            .order_by(
+                CanonicalHOSLogRecord.event_timestamp.asc(),
+                CanonicalHOSLogRecord.raw_id.asc(),
+            )
         )
 
         result = await self.session.execute(stmt)
@@ -273,7 +280,7 @@ class EngineRepository:
         self,
         tenant_id: str,
         driver_id: str,
-    ) -> Optional[AuditRecord]:
+    ) -> AuditRecord | None:
         """Fetch the most recent audit record for a driver."""
         stmt = (
             select(AuditRecord)

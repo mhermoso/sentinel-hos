@@ -7,7 +7,6 @@ pure functions; no I/O.
 from __future__ import annotations
 
 import math
-from typing import Tuple
 
 # Mean Earth radius in nautical / air miles (1 nmi = 1852 m).
 EARTH_RADIUS_AIR_MILES: float = 3440.065
@@ -40,7 +39,7 @@ def haversine_air_miles(
 
 
 def distance_from_origin_air_miles(
-    origin: Tuple[float, float],
+    origin: tuple[float, float],
     latitude: float,
     longitude: float,
 ) -> float:

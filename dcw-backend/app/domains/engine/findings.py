@@ -7,8 +7,8 @@ is suppressed for these types by default (see ``NON_TELEPHONY_FINDINGS``).
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import List, Optional, Sequence, Tuple
 
 from app.domains.engine.calculators import (
     MAX_DRIVING_SECONDS,
@@ -57,10 +57,10 @@ _DRIVING_TO_REST_EDIT_TARGETS = frozenset(
 
 
 def resolve_day_annotations(
-    day_annotations: Optional[DayAnnotations] = None,
+    day_annotations: DayAnnotations | None = None,
     *,
-    adverse_driving: Optional[bool] = None,
-    sixteen_hour_exception: Optional[bool] = None,
+    adverse_driving: bool | None = None,
+    sixteen_hour_exception: bool | None = None,
 ) -> DayAnnotations:
     """Merge evaluate kwargs onto a DayAnnotations instance."""
     base = day_annotations or DayAnnotations()
@@ -83,14 +83,14 @@ def sixteen_hour_exception_applies(annotations: DayAnnotations) -> bool:
 
 def resolve_federal_limits(
     annotations: DayAnnotations,
-) -> Tuple[float, float, List[ViolationType]]:
+) -> tuple[float, float, list[ViolationType]]:
     """Return (max_driving, max_duty_window, exception finding types applied).
 
     Adverse → 13h / 16h. § 395.1(o) → 11h / 16h. Combined → 13h / 16h.
     """
     max_driving = MAX_DRIVING_SECONDS
     max_duty = MAX_DUTY_WINDOW_SECONDS
-    applied: List[ViolationType] = []
+    applied: list[ViolationType] = []
 
     adverse = annotations.adverse_driving
     sixteen = sixteen_hour_exception_applies(annotations)
@@ -110,9 +110,9 @@ def exception_usage_findings(
     applied: Sequence[ViolationType],
     *,
     now: datetime,
-) -> List[Violation]:
+) -> list[Violation]:
     """Emit review notices when adverse / 16h limits were applied."""
-    findings: List[Violation] = []
+    findings: list[Violation] = []
     for vtype in applied:
         if vtype == ViolationType.ADVERSE_DRIVING_USED:
             findings.append(
@@ -148,12 +148,12 @@ def exception_usage_findings(
 def _segment_durations(
     timeline: DriverTimeline,
     as_of: datetime,
-) -> List[Tuple[str, datetime, datetime, float]]:
+) -> list[tuple[str, datetime, datetime, float]]:
     """Closed status segments (status, start, end, duration_seconds) up to as_of."""
     events = sorted(timeline.events, key=lambda e: e.timestamp)
     if not events:
         return []
-    segments: List[Tuple[str, datetime, datetime, float]] = []
+    segments: list[tuple[str, datetime, datetime, float]] = []
     for i, event in enumerate(events):
         start = event.timestamp
         if start > as_of:
@@ -178,7 +178,7 @@ def _pc_duration_seconds(timeline: DriverTimeline, as_of: datetime) -> float:
 
 def _ym_segments(
     timeline: DriverTimeline, as_of: datetime
-) -> List[Tuple[datetime, datetime]]:
+) -> list[tuple[datetime, datetime]]:
     return [
         (start, end)
         for status, start, end, _dur in _segment_durations(timeline, as_of)
@@ -188,7 +188,7 @@ def _ym_segments(
 
 def _pc_segments(
     timeline: DriverTimeline, as_of: datetime
-) -> List[Tuple[datetime, datetime]]:
+) -> list[tuple[datetime, datetime]]:
     return [
         (start, end)
         for status, start, end, _dur in _segment_durations(timeline, as_of)
@@ -200,7 +200,7 @@ def _fixes_in_window(
     gps_fixes: Sequence[GpsFix],
     start: datetime,
     end: datetime,
-) -> List[GpsFix]:
+) -> list[GpsFix]:
     return [f for f in gps_fixes if start <= f.timestamp <= end]
 
 
@@ -226,11 +226,11 @@ def _hours_exhaust_at(
     timeline: DriverTimeline,
     state: StateMachineResult,
     as_of: datetime,
-) -> Optional[datetime]:
+) -> datetime | None:
     """Earliest time standard 11h driving or 14h window was exhausted (if any)."""
     duty_start = state.duty_window_start
     driven = 0.0
-    drive_exhaust: Optional[datetime] = None
+    drive_exhaust: datetime | None = None
     for status, start, _end, dur in _segment_durations(timeline, as_of):
         if status != CanonicalDutyStatus.DRIVING.value:
             continue
@@ -239,7 +239,7 @@ def _hours_exhaust_at(
             break
         driven += dur
 
-    window_exhaust: Optional[datetime] = None
+    window_exhaust: datetime | None = None
     if duty_start is not None:
         candidate = duty_start + timedelta(seconds=MAX_DUTY_WINDOW_SECONDS)
         if candidate <= as_of:
@@ -256,9 +256,9 @@ def evaluate_pc_abuse_findings(
     gps_fixes: Sequence[GpsFix],
     annotations: DayAnnotations,
     now: datetime,
-) -> List[Violation]:
+) -> list[Violation]:
     """PC >3h; PC after hours exhaust; PC moving materially closer to next load."""
-    findings: List[Violation] = []
+    findings: list[Violation] = []
     pc_seconds = _pc_duration_seconds(timeline, now)
 
     if pc_seconds > PC_ABUSE_DURATION_SECONDS:
@@ -321,9 +321,9 @@ def evaluate_ym_abuse_findings(
     timeline: DriverTimeline,
     gps_fixes: Sequence[GpsFix],
     now: datetime,
-) -> List[Violation]:
+) -> list[Violation]:
     """YM at highway speeds (>32 km/h / 20 mph) from GPS when available."""
-    findings: List[Violation] = []
+    findings: list[Violation] = []
     for start, end in _ym_segments(timeline, now):
         fixes = _fixes_in_window(gps_fixes, start, end)
         speeds = [f.speed_kmh for f in fixes if f.speed_kmh is not None]
@@ -363,9 +363,9 @@ def evaluate_form_and_manner_findings(
     annotations: DayAnnotations,
     *,
     now: datetime,
-) -> List[Violation]:
+) -> list[Violation]:
     """§ 395.8 form & manner checks from supplied day evidence."""
-    findings: List[Violation] = []
+    findings: list[Violation] = []
 
     if annotations.daily_certified is False:
         findings.append(
@@ -453,17 +453,17 @@ def evaluate_findings(
     timeline: DriverTimeline,
     state: StateMachineResult,
     annotations: DayAnnotations,
-    gps_fixes: Optional[Sequence[GpsFix]] = None,
+    gps_fixes: Sequence[GpsFix] | None = None,
     now: datetime,
     include_federal_exceptions: bool = True,
-) -> List[Violation]:
+) -> list[Violation]:
     """Run Phase 6 finding evaluators and return audit-only risk findings.
 
     When ``include_federal_exceptions`` is True, emit adverse/16h usage notices
     if those limits were applied (caller still adjusts clock limits separately).
     """
     fixes: Sequence[GpsFix] = gps_fixes or ()
-    findings: List[Violation] = []
+    findings: list[Violation] = []
 
     if include_federal_exceptions:
         _drive, _duty, applied = resolve_federal_limits(annotations)

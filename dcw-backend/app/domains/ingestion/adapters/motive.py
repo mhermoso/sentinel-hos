@@ -7,8 +7,6 @@ integration is built.
 
 from __future__ import annotations
 
-from typing import List, Tuple
-
 from app.domains.ingestion.adapters import BaseTelematicsAdapter
 from app.domains.ingestion.schemas import DCWCanonicalHOSLog
 
@@ -28,5 +26,5 @@ class MotiveAdapter(BaseTelematicsAdapter):
         self,
         tenant_id: str,
         from_cursor: str,
-    ) -> Tuple[List[DCWCanonicalHOSLog], str]:
+    ) -> tuple[list[DCWCanonicalHOSLog], str]:
         raise NotImplementedError("Motive adapter not yet implemented.")

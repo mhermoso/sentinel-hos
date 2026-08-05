@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -22,7 +22,7 @@ from app.domains.engine.calculators import (
 from app.domains.engine.schemas import ShiftWindow, ViolationSeverity, ViolationType
 from app.domains.engine.state_machine import StateMachineResult
 
-UTC = timezone.utc
+UTC = UTC
 
 
 def _now() -> datetime:

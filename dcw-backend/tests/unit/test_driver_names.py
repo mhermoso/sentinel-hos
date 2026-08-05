@@ -11,7 +11,7 @@ def test_resolve_prefers_db_name(monkeypatch) -> None:
 
 def test_resolve_uses_runtime_cache_when_db_null(monkeypatch) -> None:
     monkeypatch.setattr(dn, "_RUNTIME_NAMES", {"b6": "Cached Driver"})
-    monkeypatch.setattr(dn, "load_driver_name_map", lambda: {})
+    monkeypatch.setattr(dn, "load_driver_name_map", dict)
     assert dn.resolve_driver_name("b6", None) == "Cached Driver"
 
 
