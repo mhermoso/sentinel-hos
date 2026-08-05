@@ -69,17 +69,22 @@ async def sweep_active_drivers(ctx: Dict[str, Any]) -> Dict[str, Any]:
                     cycle_days=settings.WEEKLY_CYCLE_DAYS,
                 )
 
-                # 3. Compute inputs hash for audit linkage
+                # 3. Compute inputs hash for audit linkage (ADR-003/004).
+                # Hash the full event timeline — event_count + last_event alone
+                # collides when lookback slides or intermediate statuses differ
+                # while count and tip timestamp stay the same.
                 inputs_hash = compute_inputs_hash(
                     {
                         "tenant_id": tenant_id,
                         "driver_id": driver_id,
-                        "event_count": len(timeline.events),
-                        "last_event": (
-                            timeline.events[-1].timestamp.isoformat()
-                            if timeline.events
-                            else ""
-                        ),
+                        "events": [
+                            {
+                                "status": event.status,
+                                "ts": event.timestamp.isoformat(),
+                            }
+                            for event in timeline.events
+                        ],
+                        "weekly_duty_seconds": weekly_seconds,
                     }
                 )
 

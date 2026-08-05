@@ -128,6 +128,15 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
             if consecutive_rest_start is None:
                 consecutive_rest_start = event.timestamp
             consecutive_rest_seconds += duration
+            # § 395.3(a)(3)(ii): 30 consecutive minutes off duty (OFF/SB/PC
+            # may be split across multiple status events). Reset on the
+            # accumulated streak — not a single event's duration.
+            if (
+                consecutive_rest_seconds >= 1800.0
+                and result.current_shift is not None
+            ):
+                result.current_shift.driving_since_break_seconds = 0.0
+                result.driving_since_break_seconds = 0.0
         else:
             # Non-rest: check if accumulated rest qualifies to start a shift
             if consecutive_rest_seconds >= QUALIFYING_OFF_DUTY_SECONDS:
@@ -168,11 +177,6 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
                 result.total_driving_seconds += duration
                 result.current_shift.driving_since_break_seconds += duration
                 result.driving_since_break_seconds += duration
-
-        # ── 30-min break reset ────────────────────────────────────────
-        if is_rest and duration >= 1800.0 and result.current_shift is not None:
-            result.current_shift.driving_since_break_seconds = 0.0
-            result.driving_since_break_seconds = 0.0
 
         # ── Split sleeper berth (§ 395.1(g)(1)) ──────────────────────
         if status == CanonicalDutyStatus.SLEEPER_BERTH and result.current_shift is not None:
