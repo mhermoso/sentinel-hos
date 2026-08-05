@@ -130,6 +130,8 @@
         driverId: p.driver_id,
         statusKey: key,
         hasName: Boolean(p.driver_name),
+        hasUnit: p.has_unit_assignment === true,
+        unitLabel: p.unit_label || null,
         warnCount,
         violCount,
         marker,
@@ -147,7 +149,12 @@
     state = {
       map,
       entries,
-      filters: { statuses: new Set(), alerts: new Set(), namedOnly: true },
+      filters: {
+        statuses: new Set(),
+        alerts: new Set(),
+        namedOnly: true,
+        onUnitOnly: true,
+      },
       focusedId: null,
     };
 
@@ -198,6 +205,17 @@
       });
     }
 
+    const onUnitBtn = document.getElementById("home-map-on-unit");
+    if (onUnitBtn) {
+      onUnitBtn.addEventListener("click", () => {
+        state.filters.onUnitOnly = !state.filters.onUnitOnly;
+        const on = state.filters.onUnitOnly;
+        onUnitBtn.classList.toggle("is-active", on);
+        onUnitBtn.setAttribute("aria-pressed", on ? "true" : "false");
+        applyFilters({ fit: true });
+      });
+    }
+
     const listRoot = document.getElementById("home-map-drivers");
     if (listRoot) {
       listRoot.addEventListener("click", (ev) => {
@@ -215,8 +233,9 @@
   }
 
   function entryMatches(entry, filters) {
-    const { statuses, alerts, namedOnly } = filters;
+    const { statuses, alerts, namedOnly, onUnitOnly } = filters;
     if (namedOnly && !entry.hasName) return false;
+    if (onUnitOnly && !entry.hasUnit) return false;
     if (statuses.size > 0 && !statuses.has(entry.statusKey)) return false;
     if (alerts.size > 0) {
       const hasWarn = alerts.has("warn") && entry.warnCount > 0;

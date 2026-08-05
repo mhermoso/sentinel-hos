@@ -434,6 +434,9 @@ class DriverPositionResponse(BaseModel):
     violation_count: int = 0
     latest_alert_severity: str | None = None
     latest_alert_type: str | None = None
+    # Roster-derived (None when no driver_roster row; False for unassigned sentinels)
+    has_unit_assignment: bool | None = None
+    unit_label: str | None = None
 
 
 class DriverPositionsResponse(BaseModel):

@@ -91,7 +91,9 @@ from app.domains.engine.models import AuditRecord
 from app.domains.engine.repository import EngineRepository
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.repository import IngestionRepository
+from app.domains.ingestion.roster import is_unassigned_driver_id
 from app.domains.ingestion.roster_repository import RosterRepository
+from app.domains.ingestion.schemas import DriverRosterEntry
 from app.domains.notifier.alert_logger import read_alert_log
 
 logger = logging.getLogger("dcw.dashboard.router")
@@ -105,6 +107,24 @@ router = APIRouter(prefix="/api", tags=["dashboard"])
 def _is_geotab_tenant(tenant_id: str) -> bool:
     """Backtest dispatches are Geotab-scoped only."""
     return bool(settings.GEOTAB_DATABASE) and tenant_id == settings.GEOTAB_DATABASE
+
+
+def _position_roster_fields(
+    driver_id: str,
+    roster_by_id: dict[str, DriverRosterEntry],
+) -> tuple[bool | None, str | None]:
+    """Return ``(has_unit_assignment, unit_label)`` for a map position row.
+
+    Unassigned HOS sentinels are never "on a unit". Missing roster rows leave
+    both fields ``None`` so the client can treat them as off-unit under the
+    default filter.
+    """
+    if is_unassigned_driver_id(driver_id):
+        return False, None
+    roster = roster_by_id.get(driver_id)
+    if roster is None:
+        return None, None
+    return bool(roster.has_unit_assignment), roster.unit_label
 
 
 async def _list_all_drivers(
@@ -594,6 +614,7 @@ async def get_driver_positions(
     )
     result = await session.execute(stmt)
     records = list(result.scalars().all())
+    roster_by_id = await RosterRepository(session).map_by_external_id(tenant_id)
 
     start, end = default_alerts_utc_window(default_display_timezone())
     live = await _fleet_live_audit_markers(
@@ -608,23 +629,29 @@ async def get_driver_positions(
     )
     by_driver = _alert_stats_by_driver(merged)
 
-    positions = [
-        DriverPositionResponse(
-            driver_id=rec.driver_id,
-            driver_name=resolve_driver_name(rec.driver_id, rec.driver_name),
-            status=rec.status,
-            latitude=float(rec.latitude),
-            longitude=float(rec.longitude),
-            event_timestamp=rec.event_timestamp,
-            is_live=rec.driver_id in active_ids,
-            warning_count=by_driver.get(rec.driver_id, (0, 0, None, None))[0],
-            violation_count=by_driver.get(rec.driver_id, (0, 0, None, None))[1],
-            latest_alert_severity=by_driver.get(rec.driver_id, (0, 0, None, None))[2],
-            latest_alert_type=by_driver.get(rec.driver_id, (0, 0, None, None))[3],
+    positions: list[DriverPositionResponse] = []
+    for rec in records:
+        if rec.latitude is None or rec.longitude is None:
+            continue
+        has_unit, unit_label = _position_roster_fields(rec.driver_id, roster_by_id)
+        warn, viol, sev, vtype = by_driver.get(rec.driver_id, (0, 0, None, None))
+        positions.append(
+            DriverPositionResponse(
+                driver_id=rec.driver_id,
+                driver_name=resolve_driver_name(rec.driver_id, rec.driver_name),
+                status=rec.status,
+                latitude=float(rec.latitude),
+                longitude=float(rec.longitude),
+                event_timestamp=rec.event_timestamp,
+                is_live=rec.driver_id in active_ids,
+                warning_count=warn,
+                violation_count=viol,
+                latest_alert_severity=sev,
+                latest_alert_type=vtype,
+                has_unit_assignment=has_unit,
+                unit_label=unit_label,
+            )
         )
-        for rec in records
-        if rec.latitude is not None and rec.longitude is not None
-    ]
     positions.sort(
         key=lambda p: ((p.driver_name or "").lower(), p.driver_id),
     )

@@ -87,8 +87,12 @@
   <div class="map-drivers-wrap">
     <div class="map-drivers-label">
       <span>Located drivers · click to zoom</span>
-      <button type="button" id="home-map-named-only" class="map-filter-toggle is-active"
-              aria-pressed="true" data-filter-named="1">Named only</button>
+      <div class="map-filter-toggles">
+        <button type="button" id="home-map-on-unit" class="map-filter-toggle is-active"
+                aria-pressed="true" data-filter-on-unit="1">On a unit</button>
+        <button type="button" id="home-map-named-only" class="map-filter-toggle is-active"
+                aria-pressed="true" data-filter-named="1">Named only</button>
+      </div>
     </div>
     <ul id="home-map-drivers" class="map-drivers" aria-label="Drivers with location">
       {% for p in positions %}
@@ -105,10 +109,10 @@
       {% else %}{% set sc = 'status-unknown' %}{% endif %}
       <li>
         <button type="button" class="map-driver-row" data-focus-driver="{{ p.driver_id }}"
-                data-status-key="{{ sk }}"{% if p.driver_name %} data-has-name="1"{% else %} data-has-name="0"{% endif %}>
+                data-status-key="{{ sk }}"{% if p.driver_name %} data-has-name="1"{% else %} data-has-name="0"{% endif %}{% if p.has_unit_assignment %} data-has-unit="1"{% else %} data-has-unit="0"{% endif %}>
           <span class="hos-marker {{ sc }}" aria-hidden="true"></span>
           <span class="map-driver-text">
-            <span class="map-driver-name">{{ p.driver_name or p.driver_id }}</span>
+            <span class="map-driver-name">{{ p.driver_name or p.driver_id }}{% if p.unit_label %} · {{ p.unit_label }}{% endif %}</span>
             {% if p.driver_name %}<span class="muted mono map-driver-id">{{ p.driver_id }}</span>{% endif %}
           </span>
           {% if p.warning_count and p.warning_count > 0 %}

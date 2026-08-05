@@ -1228,9 +1228,16 @@ table[data-sortable] th.is-sorted .sort-btn,
   color: var(--accent);
   border-color: var(--accent-dim);
 }
+.map-filter-toggles {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .map-filter-toggle {
   margin: 0;
-  margin-left: auto;
   padding: 0.15rem 0.45rem;
   border: 1px solid var(--line);
   border-radius: 3px;
