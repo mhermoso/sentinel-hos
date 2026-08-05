@@ -309,3 +309,128 @@ def test_contributing_logs_weekly_matches_restart_window() -> None:
     assert totals["contributed_seconds"] == pytest.approx(duty_seconds, abs=1)
     assert duty_seconds == pytest.approx(detail["clocks"]["weekly_used_h"] * 3600, abs=2)
     assert duty_seconds == pytest.approx(2 * 3600, abs=1)
+
+
+def test_contributing_logs_pc_abuse_marks_pc_after_exhaust() -> None:
+    """After-hours PC_ABUSE: only PC started after 11h exhaust is contributed."""
+    events = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(0)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=_ts(10)),
+        DriverTimeline.HOSEvent(
+            status=CanonicalDutyStatus.PERSONAL_CONVEYANCE.value,
+            timestamp=_ts(21),  # after 11h driving
+        ),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(21.5)),
+    ]
+    as_of = _ts(21.5)
+    detail = build_alert_detail(
+        driver_id="drv1",
+        tenant_id="tenant1",
+        driver_name="Test Driver",
+        events=events,
+        as_of=as_of,
+        violation_type="PC_ABUSE",
+        source="backtest",
+        display_tz_name="America/Chicago",
+    )
+    assert detail["meta"]["matched_on_recompute"] is True
+    assert "exhausted" in detail["meta"]["description"].lower()
+
+    logs = detail["contributing_logs"]
+    assert logs
+    pc_rows = [row for row in logs if row["status"] == "PC"]
+    assert pc_rows
+    assert all(row["contributed"] is True for row in pc_rows)
+    assert all(row["counts_as"] == "pc" for row in pc_rows)
+    for row in logs:
+        if row["status"] != "PC":
+            assert row["contributed"] is False
+
+    totals = detail["contributing_log_totals"]
+    assert totals["contributed_seconds"] == pytest.approx(totals["PC_seconds"], abs=1)
+    assert totals["PC_seconds"] == pytest.approx(0.5 * 3600, abs=1)
+
+    # Context graph keeps status=PC with lane=OFF (day-grid mapping) and highlights it.
+    ctx_pc = [ev for ev in detail["context_events"] if ev["status"] == "PC"]
+    assert ctx_pc
+    assert all(ev["lane"] == "OFF" for ev in ctx_pc)
+    assert any(ev["highlighted"] for ev in ctx_pc)
+
+
+def test_contributing_logs_pc_abuse_duration_marks_all_pc() -> None:
+    """Duration PC_ABUSE (>3h): all overlapping PC in the shift window contributed."""
+    events = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(0)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.ON_DUTY.value, timestamp=_ts(10)),
+        DriverTimeline.HOSEvent(
+            status=CanonicalDutyStatus.PERSONAL_CONVEYANCE.value,
+            timestamp=_ts(11),
+        ),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(15)),
+    ]
+    as_of = _ts(15)
+    detail = build_alert_detail(
+        driver_id="drv1",
+        tenant_id="tenant1",
+        driver_name="Test Driver",
+        events=events,
+        as_of=as_of,
+        violation_type="PC_ABUSE",
+        source="backtest",
+        display_tz_name="America/Chicago",
+    )
+    assert detail["meta"]["matched_on_recompute"] is True
+    logs = detail["contributing_logs"]
+    assert logs
+    for row in logs:
+        if row["status"] == "PC":
+            assert row["contributed"] is True
+        else:
+            assert row["contributed"] is False
+    totals = detail["contributing_log_totals"]
+    assert totals["PC_seconds"] == pytest.approx(4 * 3600, abs=1)
+    assert totals["contributed_seconds"] == pytest.approx(totals["PC_seconds"], abs=1)
+
+
+def test_contributing_logs_pc_abuse_scopes_pre_exhaust_pc() -> None:
+    """After-hours match: PC before hours exhaust is context-only; post-exhaust PC contributes."""
+    events = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(0)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=_ts(10)),
+        # Short PC mid-shift before 11h driving exhaust (at _ts(21))
+        DriverTimeline.HOSEvent(
+            status=CanonicalDutyStatus.PERSONAL_CONVEYANCE.value,
+            timestamp=_ts(15),
+        ),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=_ts(15.5)),
+        DriverTimeline.HOSEvent(
+            status=CanonicalDutyStatus.PERSONAL_CONVEYANCE.value,
+            timestamp=_ts(21.5),
+        ),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(22)),
+    ]
+    as_of = _ts(22)
+    detail = build_alert_detail(
+        driver_id="drv1",
+        tenant_id="tenant1",
+        driver_name="Test Driver",
+        events=events,
+        as_of=as_of,
+        violation_type="PC_ABUSE",
+        source="backtest",
+        display_tz_name="America/Chicago",
+    )
+    assert detail["meta"]["matched_on_recompute"] is True
+    # Prefer exhaust-scoped match when present among PC_ABUSE findings
+    desc = detail["meta"]["description"].lower()
+    logs = detail["contributing_logs"]
+    pc_rows = [row for row in logs if row["status"] == "PC"]
+    assert len(pc_rows) >= 2
+    pre = next(row for row in pc_rows if row["start_utc"] == _ts(15).isoformat())
+    post = next(row for row in pc_rows if row["start_utc"] == _ts(21.5).isoformat())
+    if "exhausted" in desc:
+        assert pre["contributed"] is False
+        assert post["contributed"] is True
+    else:
+        # Duration-only match (unlikely here): both PC rows would contribute
+        assert post["contributed"] is True

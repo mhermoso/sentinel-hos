@@ -16,6 +16,7 @@ from app.domains.engine.calculators import (
     MAX_DRIVING_SECONDS,
     MAX_DUTY_WINDOW_SECONDS,
 )
+from app.domains.engine.findings import _hours_exhaust_at
 from app.domains.engine.replay import (
     compute_weekly_duty_seconds,
     find_restart_reset_point,
@@ -81,8 +82,15 @@ def _segment_highlighted(
     violation_type: str,
     causal_start: datetime | None,
     as_of: datetime,
+    pc_highlight_after: datetime | None = None,
 ) -> bool:
-    """Mark segments that contributed to the firing rule within the causal window."""
+    """Mark segments that contributed to the firing rule within the causal window.
+
+    For ``PC_ABUSE``, overlapping personal-conveyance segments are marked. When
+    ``pc_highlight_after`` is set (after-hours exhaust variant), only PC that
+    started at/after that time is highlighted — matching ``findings.py``.
+    Other PC_ABUSE variants mark all overlapping PC in the causal window.
+    """
     if causal_start is None:
         return False
     # Overlap with [causal_start, as_of]
@@ -96,6 +104,15 @@ def _segment_highlighted(
         return status in _DUTY_STATUSES
     if violation_type == ViolationType.REST_BREAK.value:
         return status == CanonicalDutyStatus.DRIVING.value
+    if violation_type == ViolationType.PC_ABUSE.value:
+        if status != CanonicalDutyStatus.PERSONAL_CONVEYANCE.value:
+            return False
+        if pc_highlight_after is not None:
+            # Engine: PC segment start >= exhaust_at - 1s
+            return _ensure_utc(seg_start) >= _ensure_utc(pc_highlight_after) - timedelta(
+                seconds=1
+            )
+        return True
     return False
 
 
@@ -207,8 +224,12 @@ def _context_events(
     after_hours: float = 2.0,
     violation_type: str = "",
     causal_start: datetime | None = None,
+    pc_highlight_after: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Build zoomed OFF/SB/D/ON segments around ``as_of`` for the context graph."""
+    """Build zoomed OFF/SB/D/ON segments around ``as_of`` for the context graph.
+
+    PC/YM keep their status codes; ``lane`` maps PC→OFF / YM→ON (day-grid pattern).
+    """
     as_of = _ensure_utc(as_of)
     window_start = as_of - timedelta(hours=before_hours)
     window_end = as_of + timedelta(hours=after_hours)
@@ -265,6 +286,7 @@ def _context_events(
                     violation_type=violation_type,
                     causal_start=causal_start,
                     as_of=as_of,
+                    pc_highlight_after=pc_highlight_after,
                 ),
             }
         )
@@ -349,6 +371,7 @@ def _contributing_logs(
     violation_type: str,
     tz: ZoneInfo,
     records_meta: dict[tuple[datetime, str], dict[str, Any]] | None = None,
+    pc_highlight_after: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Build tabular duty-status segments for the causal clock window.
 
@@ -394,6 +417,7 @@ def _contributing_logs(
             violation_type=violation_type,
             causal_start=causal_start,
             as_of=as_of,
+            pc_highlight_after=pc_highlight_after,
         )
         if status in seconds_by_status:
             seconds_by_status[status] += duration
@@ -729,12 +753,24 @@ def build_alert_detail(
     causal_start: datetime | None = None
     if shift_window.get("start_utc"):
         causal_start = _ensure_utc(datetime.fromisoformat(shift_window["start_utc"]))
+
+    # After-hours PC_ABUSE: scope highlights to PC started at/after 11h/14h exhaust.
+    # Duration / toward-load variants leave this None → all overlapping PC.
+    pc_highlight_after: datetime | None = None
+    if (
+        violation_type == ViolationType.PC_ABUSE.value
+        and matched is not None
+        and "exhausted" in matched.description.lower()
+    ):
+        pc_highlight_after = _hours_exhaust_at(truncated, state, as_of)
+
     context = _context_events(
         truncated.events,
         as_of,
         tz,
         violation_type=violation_type,
         causal_start=causal_start,
+        pc_highlight_after=pc_highlight_after,
     )
     contrib_logs, contrib_totals = _contributing_logs(
         truncated.events,
@@ -743,6 +779,7 @@ def build_alert_detail(
         violation_type=violation_type,
         tz=tz,
         records_meta=records_meta,
+        pc_highlight_after=pc_highlight_after,
     )
     contributing_window = ""
     if causal_start is not None:

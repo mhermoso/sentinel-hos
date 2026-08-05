@@ -3,6 +3,15 @@
  */
 (function () {
   const STATUSES = ["OFF", "SB", "D", "ON"];
+  // Match day grid / hos_grid.js: PC plots on OFF, YM on ON.
+  const LANE_FOR_STATUS = {
+    OFF: "OFF",
+    SB: "SB",
+    D: "D",
+    ON: "ON",
+    PC: "OFF",
+    YM: "ON",
+  };
 
   function parseJsonHost(host) {
     const script = host.querySelector('script[type="application/json"]');
@@ -128,8 +137,20 @@
     });
   }
 
-  function yForStatus(status, height, padTop, padBottom) {
-    const idx = STATUSES.indexOf(status);
+  function laneFor(evOrStatus) {
+    if (evOrStatus && typeof evOrStatus === "object") {
+      if (evOrStatus.lane && STATUSES.indexOf(evOrStatus.lane) >= 0) {
+        return evOrStatus.lane;
+      }
+      return LANE_FOR_STATUS[evOrStatus.status] || null;
+    }
+    return LANE_FOR_STATUS[evOrStatus] || (STATUSES.indexOf(evOrStatus) >= 0 ? evOrStatus : null);
+  }
+
+  function yForStatus(statusOrEv, height, padTop, padBottom) {
+    const lane = laneFor(statusOrEv);
+    if (!lane) return null;
+    const idx = STATUSES.indexOf(lane);
     if (idx < 0) return null;
     const usable = height - padTop - padBottom;
     return padTop + (idx * usable) / (STATUSES.length - 1);
@@ -275,7 +296,7 @@
     // Highlight bands under the step line for causal segments
     events.forEach((ev) => {
       if (!ev.highlighted) return;
-      const y = yForStatus(ev.status, height, padTop, padBottom);
+      const y = yForStatus(ev, height, padTop, padBottom);
       if (y == null) return;
       const x0 = padL + (ev.fraction_start || 0) * usable;
       const x1 = padL + (ev.fraction_end || 0) * usable;
@@ -290,7 +311,7 @@
     });
     const parts = [];
     events.forEach((ev, i) => {
-      const y = yForStatus(ev.status, height, padTop, padBottom);
+      const y = yForStatus(ev, height, padTop, padBottom);
       if (y == null) return;
       const x0 = padL + (ev.fraction_start || 0) * usable;
       const x1 = padL + (ev.fraction_end || 0) * usable;
@@ -298,7 +319,7 @@
       else parts.push(`L ${x0.toFixed(1)} ${y.toFixed(1)}`);
       parts.push(`H ${x1.toFixed(1)}`);
       if (i + 1 < events.length) {
-        const ny = yForStatus(events[i + 1].status, height, padTop, padBottom);
+        const ny = yForStatus(events[i + 1], height, padTop, padBottom);
         if (ny != null) parts.push(`V ${ny.toFixed(1)}`);
       }
     });
@@ -326,7 +347,7 @@
     for (let i = 0; i < events.length; i++) {
       const ev = events[i];
       if (frac >= ev.fraction_start && frac < ev.fraction_end) {
-        const yy = yForStatus(ev.status, height, padTop, padBottom);
+        const yy = yForStatus(ev, height, padTop, padBottom);
         if (yy != null) ay = yy;
         break;
       }
