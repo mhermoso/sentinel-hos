@@ -16,7 +16,7 @@ from app.domains.engine.calculators import (
     MAX_DRIVING_SECONDS,
     MAX_DUTY_WINDOW_SECONDS,
 )
-from app.domains.engine.findings import _hours_exhaust_at
+from app.domains.engine.findings import _hours_exhaust_at, _pc_segments
 from app.domains.engine.replay import (
     compute_weekly_duty_seconds,
     find_restart_reset_point,
@@ -763,6 +763,33 @@ def build_alert_detail(
         and "exhausted" in matched.description.lower()
     ):
         pc_highlight_after = _hours_exhaust_at(truncated, state, as_of)
+
+    # Engine PC_ABUSE inspects the full truncated timeline, but the default
+    # evaluation window is only the current shift. Expand causal_start so the
+    # contributing table includes the PC segments that actually fired the rule
+    # (e.g. PC after exhaust in a prior shift that is still on the timeline).
+    if violation_type == ViolationType.PC_ABUSE.value and matched is not None:
+        pc_starts = [
+            _ensure_utc(start)
+            for start, _end in _pc_segments(truncated, as_of)
+            if pc_highlight_after is None
+            or _ensure_utc(start)
+            >= _ensure_utc(pc_highlight_after) - timedelta(seconds=1)
+        ]
+        if pc_starts:
+            pc_window_start = min(pc_starts)
+            if causal_start is None or pc_window_start < causal_start:
+                causal_start = pc_window_start
+                shift_window = {
+                    **shift_window,
+                    "label": "PC abuse window",
+                    "start_utc": causal_start.isoformat(),
+                    "start_local": _local_label(causal_start, tz),
+                    "note": (
+                        "From first contributing PC on the evaluation timeline "
+                        "(engine scans beyond the current shift)"
+                    ),
+                }
 
     context = _context_events(
         truncated.events,

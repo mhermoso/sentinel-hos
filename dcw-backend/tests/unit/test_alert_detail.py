@@ -434,3 +434,40 @@ def test_contributing_logs_pc_abuse_scopes_pre_exhaust_pc() -> None:
     else:
         # Duration-only match (unlikely here): both PC rows would contribute
         assert post["contributed"] is True
+
+
+def test_contributing_logs_pc_abuse_includes_pc_before_current_shift() -> None:
+    """PC_ABUSE can fire on timeline PC outside the current shift; list must still show it."""
+    # Drive to 11h exhaust, PC after exhaust, ≥10h OFF reset, then a new shift with no PC.
+    events = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(0)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=_ts(10)),
+        DriverTimeline.HOSEvent(
+            status=CanonicalDutyStatus.PERSONAL_CONVEYANCE.value,
+            timestamp=_ts(21.2),
+        ),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(21.5)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.ON_DUTY.value, timestamp=_ts(34)),
+        DriverTimeline.HOSEvent(
+            status=CanonicalDutyStatus.SLEEPER_BERTH.value,
+            timestamp=_ts(35),
+        ),
+    ]
+    as_of = _ts(40)
+    detail = build_alert_detail(
+        driver_id="drv1",
+        tenant_id="tenant1",
+        driver_name="Test Driver",
+        events=events,
+        as_of=as_of,
+        violation_type="PC_ABUSE",
+        source="backtest",
+        display_tz_name="America/Chicago",
+    )
+    assert detail["meta"]["matched_on_recompute"] is True
+    assert "exhausted" in detail["meta"]["description"].lower()
+    pc_rows = [row for row in detail["contributing_logs"] if row["status"] == "PC"]
+    assert pc_rows, "contributing list must include the prior-shift PC that fired the rule"
+    assert any(row["contributed"] is True for row in pc_rows)
+    assert detail["shift_window"]["label"] == "PC abuse window"
+    assert detail["contributing_log_totals"]["contributed_seconds"] > 0
