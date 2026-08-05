@@ -468,6 +468,48 @@ class AlertWeeklyRestartResponse(BaseModel):
     message: str = ""
 
 
+class AlertContributingLogEntry(BaseModel):
+    """One duty-status segment inside the alert's causal clock window."""
+
+    status: str
+    lane: str = ""
+    start_local: str
+    end_local: str
+    start_utc: str = ""
+    end_utc: str = ""
+    duration_hhmm: str
+    duration_seconds: float
+    contributed: bool = False
+    counts_as: str = Field(
+        default="other",
+        description="driving | duty | pc | ym | rest | other",
+    )
+    raw_id: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class AlertContributingLogTotals(BaseModel):
+    """Duration totals across the contributing HOS log window."""
+
+    D_seconds: float = 0.0
+    ON_seconds: float = 0.0
+    PC_seconds: float = 0.0
+    YM_seconds: float = 0.0
+    OFF_seconds: float = 0.0
+    SB_seconds: float = 0.0
+    D: str = "00:00"
+    ON: str = "00:00"
+    PC: str = "00:00"
+    YM: str = "00:00"
+    OFF: str = "00:00"
+    SB: str = "00:00"
+    rest_seconds: float = 0.0
+    rest: str = "00:00"
+    contributed_seconds: float = 0.0
+    contributed: str = "00:00"
+
+
 class AlertDetailResponse(BaseModel):
     """Full calculation detail payload for an alert marker click."""
 
@@ -479,6 +521,9 @@ class AlertDetailResponse(BaseModel):
     context_window: dict[str, Any] = Field(default_factory=dict)
     shift_window: AlertShiftWindowResponse | None = None
     weekly_restart: AlertWeeklyRestartResponse | None = None
+    contributing_logs: list[AlertContributingLogEntry] = Field(default_factory=list)
+    contributing_log_totals: AlertContributingLogTotals | None = None
+    contributing_window: str = ""
     day_date: str = ""
 
 

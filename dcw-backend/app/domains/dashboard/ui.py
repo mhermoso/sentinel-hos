@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_session
-from app.domains.dashboard.alert_detail import build_alert_detail, logs_to_events
+from app.domains.dashboard.alert_detail import build_alert_detail, logs_meta_map, logs_to_events
 from app.domains.dashboard.alert_filters import (
     default_alerts_local_range,
     detect_active_range,
@@ -734,6 +734,7 @@ async def _alert_detail_page_context(
     db_name = next((r.driver_name for r in records if r.driver_name), None)
     driver_name = resolve_driver_name(driver_id, db_name)
     events = logs_to_events(records)
+    records_meta = logs_meta_map(records)
     profile = await EngineRepository(session).get_driver_profile(tenant_id, driver_id)
     detail = build_alert_detail(
         driver_id=driver_id,
@@ -748,6 +749,7 @@ async def _alert_detail_page_context(
         severity_hint=severity,
         rule_ref_hint=rule_ref,
         profile=profile,
+        records_meta=records_meta,
     )
     detail_model = AlertDetailResponse.model_validate(detail)
     detail_json = detail_model.model_dump(mode="json")

@@ -802,6 +802,68 @@ a:hover { text-decoration: underline; }
 .warn-text { color: var(--warn); }
 .small { font-size: 0.75rem; }
 
+.contrib-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.85rem;
+  margin: 0.55rem 0 0.7rem;
+  font-size: 0.78rem;
+}
+.contrib-total {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  color: var(--muted);
+}
+.contrib-total .label { text-transform: uppercase; letter-spacing: 0.03em; font-size: 0.68rem; }
+.contrib-total .mono { color: var(--ink); }
+.contrib-total-rule .mono { color: var(--accent); }
+.contrib-log-scroll {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel, #121820);
+}
+.contrib-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  min-width: 640px;
+}
+.contrib-log-table th,
+.contrib-log-table td {
+  padding: 0.4rem 0.55rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  white-space: nowrap;
+}
+.contrib-log-table th {
+  color: var(--muted);
+  font-weight: 500;
+  position: sticky;
+  top: 0;
+  background: #161e28;
+  z-index: 1;
+}
+.contrib-log-table tbody tr.contrib-row-yes {
+  background: rgba(61, 156, 240, 0.07);
+}
+.contrib-log-table tbody tr.contrib-row-no {
+  opacity: 0.88;
+}
+.contrib-log-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.contrib-yes {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 .gauge-row { margin-bottom: 0.75rem; }
 .gauge-label {
   display: flex;

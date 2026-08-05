@@ -34,7 +34,7 @@ from app.core.config import settings
 from app.core.database import get_session
 from app.core.ops_log import read_ops_log
 from app.core.redis import get_redis
-from app.domains.dashboard.alert_detail import build_alert_detail, logs_to_events
+from app.domains.dashboard.alert_detail import build_alert_detail, logs_meta_map, logs_to_events
 from app.domains.dashboard.alert_filters import (
     default_alerts_utc_window,
     normalize_filter_str,
@@ -1167,6 +1167,7 @@ async def get_alert_detail(
     db_name = next((r.driver_name for r in records if r.driver_name), None)
     driver_name = resolve_driver_name(driver_id, db_name)
     events = logs_to_events(records)
+    records_meta = logs_meta_map(records)
     profile = await EngineRepository(session).get_driver_profile(tenant_id, driver_id)
     payload = build_alert_detail(
         driver_id=driver_id,
@@ -1181,6 +1182,7 @@ async def get_alert_detail(
         severity_hint=severity,
         rule_ref_hint=rule_ref,
         profile=profile,
+        records_meta=records_meta,
     )
     return AlertDetailResponse.model_validate(payload)
 

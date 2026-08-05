@@ -94,6 +94,50 @@
     </div>
   </section>
 
+  <section class="detail-section contributing-hos-log">
+    <h3>Contributing HOS log</h3>
+    {% if detail.contributing_logs and detail.contributing_log_totals %}
+    <p class="muted small">{{ detail.contributing_window }}</p>
+    <p class="hint">Rows marked contributed count toward the firing rule; others are context in the same window.</p>
+    <div class="contrib-totals" aria-label="Window duration totals">
+      <span class="contrib-total"><span class="label">Driving</span> <span class="mono">{{ detail.contributing_log_totals.D }}</span></span>
+      <span class="contrib-total"><span class="label">On-duty</span> <span class="mono">{{ detail.contributing_log_totals.ON }}</span></span>
+      <span class="contrib-total"><span class="label">PC</span> <span class="mono">{{ detail.contributing_log_totals.PC }}</span></span>
+      <span class="contrib-total"><span class="label">YM</span> <span class="mono">{{ detail.contributing_log_totals.YM }}</span></span>
+      <span class="contrib-total"><span class="label">Rest</span> <span class="mono">{{ detail.contributing_log_totals.rest }}</span></span>
+      <span class="contrib-total contrib-total-rule"><span class="label">Contributed</span> <span class="mono">{{ detail.contributing_log_totals.contributed }}</span></span>
+    </div>
+    <div class="contrib-log-scroll">
+      <table class="contrib-log-table">
+        <thead>
+          <tr>
+            <th>Start</th>
+            <th>End</th>
+            <th>Status</th>
+            <th>Duration</th>
+            <th>Contributed</th>
+            <th>Counts as</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in detail.contributing_logs %}
+          <tr class="{% if row.contributed %}contrib-row-yes{% else %}contrib-row-no{% endif %}">
+            <td class="mono">{{ row.start_local }}</td>
+            <td class="mono">{{ row.end_local }}</td>
+            <td><span class="status-chip status-{{ row.lane }}">{{ row.status }}</span></td>
+            <td class="mono">{{ row.duration_hhmm }}</td>
+            <td>{% if row.contributed %}<span class="contrib-yes">yes</span>{% else %}<span class="muted">no</span>{% endif %}</td>
+            <td class="muted">{{ row.counts_as }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted small">No causal window segments available for this alert.</p>
+    {% endif %}
+  </section>
+
   <footer class="alert-detail-foot">
     <span class="muted">{{ detail.meta.rule_pack_version }} · {{ detail.meta.display_timezone }}</span>
     <span class="alert-detail-actions">

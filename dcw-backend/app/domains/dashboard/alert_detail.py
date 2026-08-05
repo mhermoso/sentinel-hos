@@ -271,6 +271,195 @@ def _context_events(
     return out
 
 
+def _counts_as(status: str) -> str:
+    """Classify a duty status for contributing-log display."""
+    if status == CanonicalDutyStatus.DRIVING.value:
+        return "driving"
+    if status == CanonicalDutyStatus.ON_DUTY.value:
+        return "duty"
+    if status == CanonicalDutyStatus.YARD_MOVE.value:
+        return "ym"
+    if status == CanonicalDutyStatus.PERSONAL_CONVEYANCE.value:
+        return "pc"
+    if status in (
+        CanonicalDutyStatus.OFF_DUTY.value,
+        CanonicalDutyStatus.SLEEPER_BERTH.value,
+    ):
+        return "rest"
+    return "other"
+
+
+def _empty_contributing_totals() -> dict[str, Any]:
+    zero = format_duration_hhmm(0.0)
+    return {
+        "D_seconds": 0.0,
+        "ON_seconds": 0.0,
+        "PC_seconds": 0.0,
+        "YM_seconds": 0.0,
+        "OFF_seconds": 0.0,
+        "SB_seconds": 0.0,
+        "D": zero,
+        "ON": zero,
+        "PC": zero,
+        "YM": zero,
+        "OFF": zero,
+        "SB": zero,
+        "rest_seconds": 0.0,
+        "rest": zero,
+        "contributed_seconds": 0.0,
+        "contributed": zero,
+    }
+
+
+def _status_timeline_in_window(
+    events: Sequence[DriverTimeline.HOSEvent],
+    window_start: datetime,
+    window_end: datetime,
+) -> list[tuple[datetime, str]]:
+    """Build contiguous (timestamp, status) points covering ``[window_start, window_end]``."""
+    window_start = _ensure_utc(window_start)
+    window_end = _ensure_utc(window_end)
+    sorted_events = sorted(events, key=lambda e: _ensure_utc(e.timestamp))
+    carry: str | None = None
+    in_window: list[DriverTimeline.HOSEvent] = []
+    for event in sorted_events:
+        ts = _ensure_utc(event.timestamp)
+        if ts < window_start:
+            carry = event.status
+        elif ts <= window_end:
+            in_window.append(event)
+
+    timeline: list[tuple[datetime, str]] = []
+    if carry is not None:
+        timeline.append((window_start, carry))
+    for event in in_window:
+        ts = _ensure_utc(event.timestamp)
+        if timeline and timeline[-1][0] == ts:
+            timeline[-1] = (ts, event.status)
+        else:
+            timeline.append((ts, event.status))
+    return timeline
+
+
+def _contributing_logs(
+    events: Sequence[DriverTimeline.HOSEvent],
+    *,
+    causal_start: datetime | None,
+    as_of: datetime,
+    violation_type: str,
+    tz: ZoneInfo,
+    records_meta: dict[tuple[datetime, str], dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build tabular duty-status segments for the causal clock window.
+
+    Returns ``(entries, totals)``. Reconstructs at detail time from the truncated
+    timeline; does not persist contributing log IDs.
+    """
+    totals = _empty_contributing_totals()
+    if causal_start is None:
+        return [], totals
+
+    as_of = _ensure_utc(as_of)
+    causal_start = _ensure_utc(causal_start)
+    if as_of <= causal_start:
+        return [], totals
+
+    timeline = _status_timeline_in_window(events, causal_start, as_of)
+    if not timeline:
+        return [], totals
+
+    meta = records_meta or {}
+    seconds_by_status = {
+        CanonicalDutyStatus.DRIVING.value: 0.0,
+        CanonicalDutyStatus.ON_DUTY.value: 0.0,
+        CanonicalDutyStatus.PERSONAL_CONVEYANCE.value: 0.0,
+        CanonicalDutyStatus.YARD_MOVE.value: 0.0,
+        CanonicalDutyStatus.OFF_DUTY.value: 0.0,
+        CanonicalDutyStatus.SLEEPER_BERTH.value: 0.0,
+    }
+    contributed_seconds = 0.0
+    out: list[dict[str, Any]] = []
+
+    for idx, (ts, status) in enumerate(timeline):
+        next_ts = timeline[idx + 1][0] if idx + 1 < len(timeline) else as_of
+        if next_ts > as_of:
+            next_ts = as_of
+        if next_ts <= ts:
+            continue
+        duration = (next_ts - ts).total_seconds()
+        contributed = _segment_highlighted(
+            status,
+            ts,
+            next_ts,
+            violation_type=violation_type,
+            causal_start=causal_start,
+            as_of=as_of,
+        )
+        if status in seconds_by_status:
+            seconds_by_status[status] += duration
+        if contributed:
+            contributed_seconds += duration
+
+        row_meta = meta.get((_ensure_utc(ts), status), {})
+        # Carry-in rows are clipped to causal_start; resolve the event that set status.
+        if not row_meta and ts == causal_start:
+            latest: tuple[datetime, dict[str, Any]] | None = None
+            for key, value in meta.items():
+                key_ts, key_status = key
+                key_ts = _ensure_utc(key_ts)
+                if key_status == status and key_ts <= causal_start:
+                    if latest is None or key_ts > latest[0]:
+                        latest = (key_ts, value)
+            if latest is not None:
+                row_meta = latest[1]
+
+        out.append(
+            {
+                "status": status,
+                "lane": LANE_FOR_STATUS.get(status, status),
+                "start_local": _local_label(ts, tz),
+                "end_local": _local_label(next_ts, tz),
+                "start_utc": ts.isoformat(),
+                "end_utc": next_ts.isoformat(),
+                "duration_hhmm": format_duration_hhmm(duration),
+                "duration_seconds": duration,
+                "contributed": contributed,
+                "counts_as": _counts_as(status),
+                "raw_id": row_meta.get("raw_id"),
+                "latitude": row_meta.get("latitude"),
+                "longitude": row_meta.get("longitude"),
+            }
+        )
+
+    totals = {
+        "D_seconds": seconds_by_status[CanonicalDutyStatus.DRIVING.value],
+        "ON_seconds": seconds_by_status[CanonicalDutyStatus.ON_DUTY.value],
+        "PC_seconds": seconds_by_status[CanonicalDutyStatus.PERSONAL_CONVEYANCE.value],
+        "YM_seconds": seconds_by_status[CanonicalDutyStatus.YARD_MOVE.value],
+        "OFF_seconds": seconds_by_status[CanonicalDutyStatus.OFF_DUTY.value],
+        "SB_seconds": seconds_by_status[CanonicalDutyStatus.SLEEPER_BERTH.value],
+        "D": format_duration_hhmm(seconds_by_status[CanonicalDutyStatus.DRIVING.value]),
+        "ON": format_duration_hhmm(seconds_by_status[CanonicalDutyStatus.ON_DUTY.value]),
+        "PC": format_duration_hhmm(
+            seconds_by_status[CanonicalDutyStatus.PERSONAL_CONVEYANCE.value]
+        ),
+        "YM": format_duration_hhmm(seconds_by_status[CanonicalDutyStatus.YARD_MOVE.value]),
+        "OFF": format_duration_hhmm(seconds_by_status[CanonicalDutyStatus.OFF_DUTY.value]),
+        "SB": format_duration_hhmm(seconds_by_status[CanonicalDutyStatus.SLEEPER_BERTH.value]),
+        "rest_seconds": (
+            seconds_by_status[CanonicalDutyStatus.OFF_DUTY.value]
+            + seconds_by_status[CanonicalDutyStatus.SLEEPER_BERTH.value]
+        ),
+        "rest": format_duration_hhmm(
+            seconds_by_status[CanonicalDutyStatus.OFF_DUTY.value]
+            + seconds_by_status[CanonicalDutyStatus.SLEEPER_BERTH.value]
+        ),
+        "contributed_seconds": contributed_seconds,
+        "contributed": format_duration_hhmm(contributed_seconds),
+    }
+    return out, totals
+
+
 def _build_explanation(
     *,
     violation_type: str,
@@ -456,6 +645,7 @@ def build_alert_detail(
     severity_hint: str = "",
     rule_ref_hint: str = "",
     profile: DriverProfile | None = None,
+    records_meta: dict[tuple[datetime, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Recompute compliance at ``as_of`` and return drawer payload dict."""
     as_of = _ensure_utc(as_of)
@@ -546,6 +736,20 @@ def build_alert_detail(
         violation_type=violation_type,
         causal_start=causal_start,
     )
+    contrib_logs, contrib_totals = _contributing_logs(
+        truncated.events,
+        causal_start=causal_start,
+        as_of=as_of,
+        violation_type=violation_type,
+        tz=tz,
+        records_meta=records_meta,
+    )
+    contributing_window = ""
+    if causal_start is not None:
+        contributing_window = (
+            f"{shift_window.get('label', 'Causal window')} · "
+            f"{shift_window.get('start_local', '')} → {shift_window.get('end_local', '')}"
+        )
 
     return {
         "meta": {
@@ -595,8 +799,31 @@ def build_alert_detail(
             "as_of_fraction": 6.0 / 8.0,
         },
         "shift_window": shift_window,
+        "contributing_logs": contrib_logs,
+        "contributing_log_totals": contrib_totals,
+        "contributing_window": contributing_window,
         "day_date": local_day.isoformat(),
     }
+
+
+def logs_meta_map(records: Sequence[Any]) -> dict[tuple[datetime, str], dict[str, Any]]:
+    """Build ``(timestamp, status) → {raw_id, lat, lon}`` from ORM log rows."""
+    meta: dict[tuple[datetime, str], dict[str, Any]] = {}
+    for rec in records:
+        status = getattr(rec, "status", None)
+        ts = getattr(rec, "event_timestamp", None)
+        if status is None or ts is None:
+            continue
+        status_val = status.value if hasattr(status, "value") else str(status)
+        raw_payload = getattr(rec, "raw_payload", None)
+        if should_skip_duty_status_change(status_val, raw_payload):
+            continue
+        meta[(_ensure_utc(ts), status_val)] = {
+            "raw_id": getattr(rec, "raw_id", None),
+            "latitude": getattr(rec, "latitude", None),
+            "longitude": getattr(rec, "longitude", None),
+        }
+    return meta
 
 
 def logs_to_events(records: Sequence[Any]) -> list[DriverTimeline.HOSEvent]:
