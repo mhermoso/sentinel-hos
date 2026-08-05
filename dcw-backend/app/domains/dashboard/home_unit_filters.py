@@ -113,6 +113,8 @@ def split_units_for_home(
 
     All units with usable GPS are returned for client-side toggles.
     Alert counts are enriched from ``current_driver_id`` when present.
+    Each map item sets ``default_hidden`` when it fails the default Home
+    gates (Has driver + Known status).
     """
     stats = alert_stats or {}
     with_gps: list[HomeUnitMapItemResponse] = []
@@ -127,6 +129,9 @@ def split_units_for_home(
         warn, viol, sev, vtype = (0, 0, None, None)
         if unit.current_driver_id:
             warn, viol, sev, vtype = stats.get(unit.current_driver_id, (0, 0, None, None))
+        default_visible = matches_home_unit_filters(
+            unit, has_driver_only=True, known_status_only=True
+        )
         with_gps.append(
             HomeUnitMapItemResponse(
                 device_id=unit.device_id,
@@ -141,6 +146,7 @@ def split_units_for_home(
                 violation_count=viol,
                 latest_alert_severity=sev,
                 latest_alert_type=vtype,
+                default_hidden=not default_visible,
             )
         )
 

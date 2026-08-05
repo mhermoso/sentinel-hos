@@ -117,7 +117,68 @@ def test_split_units_for_home_gps_and_device_ids() -> None:
     assert with_gps[0].latitude == 41.8
     assert with_gps[0].longitude == -87.6
     assert with_gps[0].current_driver_id == "d1"
+    assert with_gps[0].default_hidden is False
     assert {u.device_id for u in no_loc} == {"dev-b", "dev-c"}
+
+
+def test_split_units_for_home_default_hidden_matches_filters() -> None:
+    """Map payload default_hidden mirrors Has driver + Known status gates."""
+    ts = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+    units = [
+        _unit(
+            "22",
+            current_driver_id=None,
+            current_status="UNKNOWN",
+            last_gps_at=ts,
+            last_gps_lat=41.0,
+            last_gps_lon=-87.0,
+        ),
+        _unit(
+            "23",
+            current_driver_id=None,
+            current_status="D",
+            last_gps_at=ts,
+            last_gps_lat=41.1,
+            last_gps_lon=-87.1,
+        ),
+        _unit(
+            "24",
+            current_driver_id="d1",
+            current_status="UNKNOWN",
+            last_gps_at=ts,
+            last_gps_lat=41.2,
+            last_gps_lon=-87.2,
+        ),
+        _unit(
+            "25",
+            current_driver_id="d2",
+            current_status="ON",
+            last_gps_at=ts,
+            last_gps_lat=41.3,
+            last_gps_lon=-87.3,
+        ),
+        _unit(
+            "26",
+            current_driver_id="d3",
+            current_status="PC",
+            last_gps_at=ts,
+            last_gps_lat=41.4,
+            last_gps_lon=-87.4,
+        ),
+    ]
+    with_gps, no_loc = split_units_for_home(units)
+    assert no_loc == []
+    by_id = {u.device_id: u for u in with_gps}
+    assert by_id["22"].default_hidden is True
+    assert by_id["23"].default_hidden is True
+    assert by_id["24"].default_hidden is True
+    assert by_id["25"].default_hidden is False
+    assert by_id["26"].default_hidden is False
+    for item in with_gps:
+        expect_hidden = not matches_home_unit_filters(
+            item, has_driver_only=True, known_status_only=True
+        )
+        assert item.default_hidden is expect_hidden
 
 
 def test_split_units_enriches_alert_counts_from_current_driver() -> None:

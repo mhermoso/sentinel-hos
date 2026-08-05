@@ -24,6 +24,24 @@
   }
 
   let state = null;
+  let delegatedWired = false;
+
+  function readUnits(el) {
+    const script = document.getElementById("home-units-data");
+    if (script && script.textContent && script.textContent.trim()) {
+      try {
+        return JSON.parse(script.textContent);
+      } catch (err) {
+        console.warn("HomeMap: bad units JSON from script", err);
+      }
+    }
+    try {
+      return JSON.parse(el.getAttribute("data-units") || "[]");
+    } catch (err) {
+      console.warn("HomeMap: bad units JSON", err);
+      return [];
+    }
+  }
 
   function mount() {
     const el = document.getElementById("home-map");
@@ -31,12 +49,7 @@
     if (el.dataset.mapMounted === "1") return;
     el.dataset.mapMounted = "1";
 
-    let units = [];
-    try {
-      units = JSON.parse(el.getAttribute("data-units") || "[]");
-    } catch (err) {
-      console.warn("HomeMap: bad units JSON", err);
-    }
+    const units = readUnits(el);
     const displayTz = el.getAttribute("data-display-tz") || "America/Chicago";
 
     const map = L.map(el, { scrollWheelZoom: true });
@@ -49,7 +62,7 @@
     const listById = new Map();
     if (listRoot) {
       listRoot.querySelectorAll("[data-focus-unit]").forEach((btn) => {
-        const id = btn.getAttribute("data-focus-unit");
+        const id = String(btn.getAttribute("data-focus-unit") || "");
         if (id) listById.set(id, btn);
       });
     }
@@ -63,12 +76,13 @@
       // Skip null-island / missing GPS placeholders
       if (lat === 0 && lon === 0) return;
 
-      const unitLabel = u.name || u.device_id;
+      const deviceId = String(u.device_id);
+      const unitLabel = u.name || deviceId;
       const driverLabel = u.current_driver_name || u.current_driver_id || "";
       const status = (u.current_status || "UNKNOWN").toUpperCase();
       const key = statusKey(status);
       const timeLabel = formatTimestamp(u.event_timestamp, displayTz);
-      const link = `/ui/units/${encodeURIComponent(u.device_id)}`;
+      const link = `/ui/units/${encodeURIComponent(deviceId)}`;
       const warnCount = Number(u.warning_count) || 0;
       const violCount = Number(u.violation_count) || 0;
       const hasAlert = warnCount > 0 || violCount > 0;
@@ -124,7 +138,7 @@
 
       marker.bindPopup(
         `<strong>${escapeHtml(unitLabel)}</strong><br/>` +
-          `<span class="mono">${escapeHtml(u.device_id)}</span><br/>` +
+          `<span class="mono">${escapeHtml(deviceId)}</span><br/>` +
           (driverLabel
             ? `Driver: ${escapeHtml(driverLabel)}<br/>`
             : "Driver: —<br/>") +
@@ -134,14 +148,14 @@
       );
 
       entries.push({
-        deviceId: u.device_id,
+        deviceId,
         statusKey: key,
         hasDriver,
         knownStatus,
         warnCount,
         violCount,
         marker,
-        listEl: listById.get(u.device_id) || null,
+        listEl: listById.get(deviceId) || null,
       });
     });
 
@@ -165,13 +179,16 @@
     };
 
     wireControls();
+    wireDelegatedControls();
     applyFilters({ fit: false });
   }
 
   function wireControls() {
     const legend = document.querySelector(".map-legend");
-    if (legend) {
+    if (legend && !legend.dataset.filterWired) {
+      legend.dataset.filterWired = "1";
       legend.addEventListener("click", (ev) => {
+        if (!state) return;
         const btn = ev.target.closest("[data-filter-status], [data-filter-alert]");
         if (!btn || !legend.contains(btn)) return;
         const status = btn.getAttribute("data-filter-status");
@@ -194,43 +211,48 @@
     }
 
     const clearBtn = document.getElementById("home-map-clear-filters");
-    if (clearBtn) {
+    if (clearBtn && !clearBtn.dataset.filterWired) {
+      clearBtn.dataset.filterWired = "1";
       clearBtn.addEventListener("click", () => {
         clearFilters();
       });
     }
+  }
 
-    const hasDriverBtn = document.getElementById("home-map-has-driver");
-    if (hasDriverBtn) {
-      hasDriverBtn.addEventListener("click", () => {
+  /** Document-level delegation so toggles / zoom work regardless of mount timing. */
+  function wireDelegatedControls() {
+    if (delegatedWired) return;
+    delegatedWired = true;
+
+    document.addEventListener("click", (ev) => {
+      const hasDriverBtn = ev.target.closest("#home-map-has-driver");
+      if (hasDriverBtn) {
+        if (!state) return;
         state.filters.hasDriverOnly = !state.filters.hasDriverOnly;
         const on = state.filters.hasDriverOnly;
         hasDriverBtn.classList.toggle("is-active", on);
         hasDriverBtn.setAttribute("aria-pressed", on ? "true" : "false");
         applyFilters({ fit: true });
-      });
-    }
+        return;
+      }
 
-    const knownStatusBtn = document.getElementById("home-map-known-status");
-    if (knownStatusBtn) {
-      knownStatusBtn.addEventListener("click", () => {
+      const knownStatusBtn = ev.target.closest("#home-map-known-status");
+      if (knownStatusBtn) {
+        if (!state) return;
         state.filters.knownStatusOnly = !state.filters.knownStatusOnly;
         const on = state.filters.knownStatusOnly;
         knownStatusBtn.classList.toggle("is-active", on);
         knownStatusBtn.setAttribute("aria-pressed", on ? "true" : "false");
         applyFilters({ fit: true });
-      });
-    }
+        return;
+      }
 
-    const listRoot = document.getElementById("home-map-units");
-    if (listRoot) {
-      listRoot.addEventListener("click", (ev) => {
-        const btn = ev.target.closest("[data-focus-unit]");
-        if (!btn || !listRoot.contains(btn)) return;
-        const id = btn.getAttribute("data-focus-unit");
+      const focusBtn = ev.target.closest("#home-map-units [data-focus-unit]");
+      if (focusBtn) {
+        const id = focusBtn.getAttribute("data-focus-unit");
         if (id) focusUnit(id);
-      });
-    }
+      }
+    });
   }
 
   function toggleInSet(set, value) {
@@ -251,30 +273,40 @@
     return true;
   }
 
+  function syncListVisibility(showById) {
+    document.querySelectorAll("#home-map-units [data-focus-unit]").forEach((btn) => {
+      const id = String(btn.getAttribute("data-focus-unit") || "");
+      if (!id || !showById.has(id)) return;
+      const show = showById.get(id);
+      const row = btn.closest("li") || btn;
+      row.classList.toggle("is-hidden", !show);
+      if (!show) btn.classList.remove("is-active");
+    });
+  }
+
   function applyFilters({ fit }) {
     if (!state) return;
     const { map, entries, filters } = state;
     const visible = [];
+    const showById = new Map();
 
     entries.forEach((entry) => {
       const show = entryMatches(entry, filters);
+      const id = String(entry.deviceId);
+      showById.set(id, show);
       if (show) {
         if (!map.hasLayer(entry.marker)) entry.marker.addTo(map);
         visible.push(entry);
       } else {
         if (map.hasLayer(entry.marker)) map.removeLayer(entry.marker);
-        if (state.focusedId === entry.deviceId) {
+        if (String(state.focusedId) === id) {
           entry.marker.closePopup();
           state.focusedId = null;
         }
       }
-      if (entry.listEl) {
-        const row = entry.listEl.closest("li") || entry.listEl;
-        row.classList.toggle("is-hidden", !show);
-        if (!show) entry.listEl.classList.remove("is-active");
-      }
     });
 
+    syncListVisibility(showById);
     updateVisibleCount(visible.length, entries.length);
 
     if (fit && visible.length) {
@@ -342,8 +374,9 @@
   }
 
   function focusUnit(deviceId) {
-    if (!state || !deviceId) return;
-    const entry = state.entries.find((e) => e.deviceId === deviceId);
+    if (!state || deviceId == null || deviceId === "") return;
+    const id = String(deviceId);
+    const entry = state.entries.find((e) => String(e.deviceId) === id);
     if (!entry) return;
 
     // Ensure marker is visible under current filters
@@ -354,12 +387,11 @@
     const ll = entry.marker.getLatLng();
     state.map.flyTo(ll, 12, { duration: 0.6 });
     entry.marker.openPopup();
-    state.focusedId = deviceId;
+    state.focusedId = id;
 
-    state.entries.forEach((e) => {
-      if (e.listEl) {
-        e.listEl.classList.toggle("is-active", e.deviceId === deviceId);
-      }
+    document.querySelectorAll("#home-map-units [data-focus-unit]").forEach((btn) => {
+      const btnId = String(btn.getAttribute("data-focus-unit") || "");
+      btn.classList.toggle("is-active", btnId === id);
     });
   }
 
@@ -397,9 +429,14 @@
 
   window.HomeMap = { mount, focusUnit, setFilters, clearFilters };
 
+  // Wire toggles/zoom early; mount still required for map state.
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", mount);
+    document.addEventListener("DOMContentLoaded", () => {
+      wireDelegatedControls();
+      mount();
+    });
   } else {
+    wireDelegatedControls();
     mount();
   }
 })();

@@ -273,6 +273,8 @@ class HomeUnitMapItemResponse(BaseModel):
     violation_count: int = 0
     latest_alert_severity: str | None = None
     latest_alert_type: str | None = None
+    # True when unit fails default Home gates (Has driver + Known status).
+    default_hidden: bool = False
 
 
 class UnitDetailResponse(BaseModel):
