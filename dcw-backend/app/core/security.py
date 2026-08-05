@@ -65,5 +65,6 @@ def hash_gps_breadcrumb(crumb_dict: dict[str, Any]) -> str:
         "latitude": crumb_dict.get("latitude"),
         "longitude": crumb_dict.get("longitude"),
         "speed_kmh": crumb_dict.get("speed_kmh"),
+        "odometer_m": crumb_dict.get("odometer_m"),
     }
     return compute_inputs_hash(relevant_fields)

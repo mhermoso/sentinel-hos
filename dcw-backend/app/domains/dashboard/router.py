@@ -41,12 +41,15 @@ from app.domains.dashboard.alert_filters import (
 )
 from app.domains.dashboard.day_builder import (
     METERS_PER_MILE,
+    GpsFix,
     RawHOSEvent,
     annotate_marker_hours,
+    apply_gps_distance_fallback,
     attach_alerts_to_segments,
     build_day_points,
     chicago_day_bounds,
     collect_fleet_alerts,
+    fill_odometer_from_breadcrumbs,
     filter_backtest_markers,
     format_distance_mi,
     format_duration_hhmm,
@@ -391,7 +394,35 @@ async def _build_driver_day(
         )
         for rec in records
     ]
+
+    # Samsara (and sparse Geotab) days: join breadcrumb odometer / GPS path when
+    # HOS rows lack odometer meters.
+    needs_gps_distance = any(ev.odometer_m is None for ev in raw_events)
+    gps_fixes: list[GpsFix] = []
+    if needs_gps_distance:
+        repo = IngestionRepository(session)
+        # Small lookback so carry-forward midnight can still join odometer.
+        crumbs = await repo.get_gps_breadcrumbs_for_driver_day_route(
+            tenant_id=tenant_id,
+            driver_id=driver_id,
+            start_utc=bounds.start_utc - timedelta(hours=2),
+            end_utc=bounds.end_utc,
+        )
+        gps_fixes = [
+            GpsFix(
+                event_timestamp=c.event_timestamp,
+                latitude=float(c.latitude),
+                longitude=float(c.longitude),
+                device_id=c.device_id,
+                odometer_m=c.odometer_m,
+            )
+            for c in crumbs
+        ]
+        raw_events = fill_odometer_from_breadcrumbs(raw_events, gps_fixes)
+
     grid_events, totals_seconds, carry = build_day_points(raw_events, bounds)
+    if gps_fixes:
+        apply_gps_distance_fallback(grid_events, totals_seconds, gps_fixes)
 
     unk_secs = totals_seconds.get("UNKNOWN", 0.0)
     total_tracked = sum(

@@ -265,6 +265,7 @@ class GpsBreadcrumbRecord(Base):
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
     speed_kmh = Column(Float, nullable=True)
+    odometer_m = Column(Float, nullable=True)
     raw_payload = Column(JSONB, nullable=False)
     inputs_hash = Column(String(64), nullable=False, index=True)
     ingested_at = Column(

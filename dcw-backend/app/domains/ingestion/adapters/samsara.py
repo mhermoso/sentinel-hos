@@ -16,17 +16,21 @@ Geotab-style version feed, so ``fetch_feed`` uses a watermark strategy:
   previous paginated request" if any parameter changes mid-pagination.
 - On a rate-limit or HTTP error mid-pagination the logs collected so far are
   returned with the cursor UNCHANGED, so the next poll safely re-fetches.
+- After HOS mapping, logs are enriched with odometer meters from
+  ``GET /fleet/vehicles/stats/history?types=obdOdometerMeters,gpsOdometerMeters``
+  (OBD preferred) so day-grid distance matches the Geotab odometer-delta path.
 
 Entries carry no stable provider id, so ``raw_id`` is synthetic:
 ``samsara:{driver_id}:{logStartTime}:{hosStatusType}``.
 
-**GPS** (``GET /fleet/vehicles/stats/feed?types=gps``) uses the SDK method
-``AsyncSamsara.vehicle_stats.get_vehicle_stats_feed``. The feed cursor is a
-native ``endCursor`` stored verbatim in Redis as
-``cursor:samsara-gps:{fleet_id}``. Each ``gps[]`` datapoint maps to
-``DCWGpsBreadcrumb`` with ``raw_id = samsara:gps:{vehicle_id}:{time}`` and
-``speed_kmh = speedMilesPerHour * 1.609344``. Driver attribution is done by
-the poller via ``resolve_driver_for_device`` (same pattern as Geotab LogRecord).
+**GPS** (``GET /fleet/vehicles/stats/feed?types=gps,obdOdometerMeters,gpsOdometerMeters``)
+uses the SDK method ``AsyncSamsara.vehicle_stats.get_vehicle_stats_feed``
+(max 3 types). The feed cursor is a native ``endCursor`` stored verbatim in
+Redis as ``cursor:samsara-gps:{fleet_id}``. Each ``gps[]`` datapoint maps to
+``DCWGpsBreadcrumb`` with ``raw_id = samsara:gps:{vehicle_id}:{time}``,
+``speed_kmh = speedMilesPerHour * 1.609344``, and nearest OBD/GPS odometer
+when available. Driver attribution is done by the poller via
+``resolve_driver_for_device`` (same pattern as Geotab LogRecord).
 """
 
 from __future__ import annotations
@@ -82,6 +86,101 @@ _NO_VEHICLE_SENTINEL = "0"
 
 # Statute mile → kilometre (live-verified GPS field is ``speedMilesPerHour``).
 _MPH_TO_KMH = 1.609344
+
+# Vehicle-stats feed allows at most 3 types; history enrichment uses odometer only.
+_GPS_FEED_TYPES = "gps,obdOdometerMeters,gpsOdometerMeters"
+_ODOMETER_HISTORY_TYPES = "obdOdometerMeters,gpsOdometerMeters"
+
+
+def _parse_stat_timestamp(value: Any) -> datetime | None:
+    """Parse a Samsara stats ``time`` field to UTC-aware datetime."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    return None
+
+
+def _parse_odometer_points(points: Any) -> list[tuple[datetime, float]]:
+    """Parse ``obdOdometerMeters`` / ``gpsOdometerMeters`` arrays to sorted series."""
+    if not isinstance(points, list):
+        return []
+    series: list[tuple[datetime, float]] = []
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        ts = _parse_stat_timestamp(point.get("time"))
+        value = point.get("value")
+        if ts is None or not isinstance(value, (int, float)):
+            continue
+        if value < 0:
+            continue
+        series.append((ts, float(value)))
+    series.sort(key=lambda item: item[0])
+    return series
+
+
+def preferred_odometer_series(
+    obd_points: Any,
+    gps_points: Any,
+) -> list[tuple[datetime, float]]:
+    """Prefer OBD odometer; fall back to GPS odometer when OBD is absent."""
+    obd = _parse_odometer_points(obd_points)
+    if obd:
+        return obd
+    return _parse_odometer_points(gps_points)
+
+
+def nearest_odometer_at_or_before(
+    series: list[tuple[datetime, float]],
+    as_of: datetime,
+) -> float | None:
+    """Return the last odometer reading at or before ``as_of``."""
+    if not series:
+        return None
+    target = as_of if as_of.tzinfo is not None else as_of.replace(tzinfo=UTC)
+    target = target.astimezone(UTC)
+    chosen: float | None = None
+    for ts, value in series:
+        if ts <= target:
+            chosen = value
+        else:
+            break
+    return chosen
+
+
+def stamp_odometer_on_logs(
+    logs: list[DCWCanonicalHOSLog],
+    vehicle_series: dict[str, list[tuple[datetime, float]]],
+) -> list[DCWCanonicalHOSLog]:
+    """Attach nearest odometer meters onto HOS logs that have a device id."""
+    if not logs or not vehicle_series:
+        return logs
+    stamped: list[DCWCanonicalHOSLog] = []
+    for log in logs:
+        if log.odometer_km is not None or not log.device_id:
+            stamped.append(log)
+            continue
+        series = vehicle_series.get(log.device_id)
+        if not series:
+            stamped.append(log)
+            continue
+        odo = nearest_odometer_at_or_before(series, log.event_timestamp)
+        if odo is None:
+            stamped.append(log)
+            continue
+        stamped.append(log.model_copy(update={"odometer_km": odo}))
+    return stamped
 
 
 def _driver_dict_from_sdk(driver: Any) -> dict[str, Any]:
@@ -256,6 +355,7 @@ def map_samsara_log_to_canonical(
         device_id=_extract_device_id(entry),
         latitude=latitude,
         longitude=longitude,
+        # Samsara HOS logs omit odometer; stamped later via vehicle-stats history.
         odometer_km=None,
         annotation=annotation,
         raw_payload=sanitized_payload,
@@ -304,6 +404,11 @@ def map_samsara_gps_to_breadcrumb(
     if isinstance(speed_mph, (int, float)):
         speed_kmh = float(speed_mph) * _MPH_TO_KMH
 
+    odometer_m: float | None = None
+    odo_raw = gps_entry.get("odometerMeters")
+    if isinstance(odo_raw, (int, float)) and odo_raw >= 0:
+        odometer_m = float(odo_raw)
+
     # Synthetic raw_id — GPS feed datapoints have no stable provider id.
     raw_id = f"samsara:gps:{vehicle_id}:{event_time}"
 
@@ -316,6 +421,7 @@ def map_samsara_gps_to_breadcrumb(
         latitude=latitude,
         longitude=longitude,
         speed_kmh=speed_kmh,
+        odometer_m=odometer_m,
         raw_payload=sanitize_raw_payload({"vehicleId": vehicle_id, **gps_entry}),
         inputs_hash=None,
     )
@@ -495,16 +601,114 @@ class SamsaraAdapter(BaseTelematicsAdapter):
             start_str,
             end_str,
         )
+        if valid_logs:
+            valid_logs = await self.enrich_logs_with_odometer(
+                valid_logs,
+                start_str=start_str,
+                end_str=end_str,
+            )
         return valid_logs, end_str
+
+    async def enrich_logs_with_odometer(
+        self,
+        logs: list[DCWCanonicalHOSLog],
+        *,
+        start_str: str,
+        end_str: str,
+    ) -> list[DCWCanonicalHOSLog]:
+        """Stamp odometer meters onto HOS logs from vehicle-stats history.
+
+        Uses ``obdOdometerMeters`` when present, else ``gpsOdometerMeters``.
+        Failures are logged and return the original logs (distance falls back
+        to GPS haversine in the day view).
+        """
+        vehicle_ids = sorted({log.device_id for log in logs if log.device_id})
+        if not vehicle_ids:
+            return logs
+        try:
+            series_by_vehicle = await self.fetch_odometer_history(
+                vehicle_ids=vehicle_ids,
+                start_str=start_str,
+                end_str=end_str,
+            )
+        except (TooManyRequestsError, ApiError, httpx.HTTPError, TypeError, ValueError, AttributeError) as exc:
+            logger.warning(
+                "Samsara odometer enrichment failed (%s) — HOS logs without odometer",
+                type(exc).__name__,
+            )
+            return logs
+        stamped = stamp_odometer_on_logs(logs, series_by_vehicle)
+        enriched = sum(1 for before, after in zip(logs, stamped, strict=True) if before.odometer_km != after.odometer_km)
+        if enriched:
+            logger.info(
+                "Samsara odometer enrichment: stamped %d/%d HOS logs (%d vehicles)",
+                enriched,
+                len(logs),
+                len(series_by_vehicle),
+            )
+        return stamped
+
+    async def fetch_odometer_history(
+        self,
+        *,
+        vehicle_ids: list[str],
+        start_str: str,
+        end_str: str,
+    ) -> dict[str, list[tuple[datetime, float]]]:
+        """Fetch OBD/GPS odometer series for vehicles in ``[start_str, end_str]``."""
+        if self.client is None:
+            await self.connect()
+            assert self.client is not None
+        if not vehicle_ids:
+            return {}
+
+        by_vehicle: dict[str, list[tuple[datetime, float]]] = {}
+        after: str | None = None
+        page = 0
+        # Samsara accepts comma-separated vehicle IDs; chunk to keep URLs sane.
+        chunk_size = 50
+        for offset in range(0, len(vehicle_ids), chunk_size):
+            chunk = vehicle_ids[offset : offset + chunk_size]
+            after = None
+            while True:
+                page += 1
+                response = await self.client.vehicle_stats.get_vehicle_stats_history(
+                    start_time=start_str,
+                    end_time=end_str,
+                    vehicle_ids=",".join(chunk),
+                    types=_ODOMETER_HISTORY_TYPES,
+                    after=after,
+                )
+                for vehicle in response.data:
+                    vehicle_dict = vehicle.model_dump(by_alias=True, exclude_unset=True)
+                    vehicle_id = vehicle_dict.get("id")
+                    if vehicle_id is None:
+                        continue
+                    vehicle_id_str = str(vehicle_id)
+                    series = preferred_odometer_series(
+                        vehicle_dict.get("obdOdometerMeters"),
+                        vehicle_dict.get("gpsOdometerMeters"),
+                    )
+                    if series:
+                        existing = by_vehicle.get(vehicle_id_str, [])
+                        merged = existing + series
+                        merged.sort(key=lambda item: item[0])
+                        by_vehicle[vehicle_id_str] = merged
+                pagination = response.pagination
+                if not pagination.has_next_page or not pagination.end_cursor:
+                    break
+                after = pagination.end_cursor
+        return by_vehicle
 
     async def fetch_gps_feed(
         self,
         tenant_id: str,
         from_cursor: str,
     ) -> tuple[list[dict[str, Any]], str]:
-        """Fetch GPS datapoints via ``vehicle_stats.get_vehicle_stats_feed``.
+        """Fetch GPS (+ odometer) datapoints via vehicle-stats feed.
 
-        Calls ``GET /fleet/vehicles/stats/feed?types=gps``. The Redis cursor is
+        Calls ``GET /fleet/vehicles/stats/feed`` with
+        ``types=gps,obdOdometerMeters,gpsOdometerMeters``. The Redis cursor is
         the native ``pagination.endCursor`` stored verbatim under
         ``cursor:samsara-gps:{fleet_id}``. An empty ``from_cursor`` omits
         ``after`` so the first poll returns the most recent fix per vehicle.
@@ -513,7 +717,7 @@ class SamsaraAdapter(BaseTelematicsAdapter):
         resolve device→driver attribution before mapping — same shape as
         Geotab ``fetch_log_record_feed``. Each record is::
 
-            {"vehicleId": "<id>", "vehicleName": <optional>, ...gps fields}
+            {"vehicleId": "<id>", "vehicleName": <optional>, "odometerMeters": <opt>, ...gps fields}
 
         On rate-limit / HTTP errors mid-pagination the records collected so
         far are returned with ``from_cursor`` unchanged.
@@ -531,7 +735,7 @@ class SamsaraAdapter(BaseTelematicsAdapter):
             page += 1
             try:
                 response = await self.client.vehicle_stats.get_vehicle_stats_feed(
-                    types="gps",
+                    types=_GPS_FEED_TYPES,
                     after=after,
                 )
             except TooManyRequestsError:
@@ -570,6 +774,10 @@ class SamsaraAdapter(BaseTelematicsAdapter):
                     continue
                 vehicle_id_str = str(vehicle_id)
                 vehicle_name = vehicle_dict.get("name")
+                odo_series = preferred_odometer_series(
+                    vehicle_dict.get("obdOdometerMeters"),
+                    vehicle_dict.get("gpsOdometerMeters"),
+                )
                 for gps_point in vehicle_dict.get("gps") or []:
                     if not isinstance(gps_point, dict):
                         continue
@@ -579,6 +787,11 @@ class SamsaraAdapter(BaseTelematicsAdapter):
                     }
                     if vehicle_name is not None:
                         flat["vehicleName"] = vehicle_name
+                    gps_ts = _parse_stat_timestamp(gps_point.get("time"))
+                    if gps_ts is not None and odo_series:
+                        odo = nearest_odometer_at_or_before(odo_series, gps_ts)
+                        if odo is not None:
+                            flat["odometerMeters"] = odo
                     records.append(flat)
 
             pagination = response.pagination

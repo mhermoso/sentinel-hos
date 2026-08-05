@@ -92,6 +92,7 @@ class IngestionRepository:
                 latitude=crumb.latitude,
                 longitude=crumb.longitude,
                 speed_kmh=crumb.speed_kmh,
+                odometer_m=crumb.odometer_m,
                 raw_payload=crumb.raw_payload,
                 inputs_hash=inputs_hash,
             ).on_conflict_do_nothing(

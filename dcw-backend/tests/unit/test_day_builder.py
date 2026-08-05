@@ -6,13 +6,17 @@ from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 from app.domains.dashboard.day_builder import (
+    GpsFix,
     RawHOSEvent,
+    apply_gps_distance_fallback,
     attach_alerts_to_segments,
     build_day_points,
     chicago_day_bounds,
+    fill_odometer_from_breadcrumbs,
     filter_backtest_markers,
     format_duration_hhmm,
     format_duration_hms,
+    haversine_meters,
     merge_alert_markers,
 )
 
@@ -255,3 +259,118 @@ def test_merge_alert_markers_dedupes() -> None:
     )
     assert len(filtered) == 1
     assert filtered[0]["violation_type"] == "WEEKLY_CYCLE"
+
+
+def test_fill_odometer_from_breadcrumbs() -> None:
+    events = [
+        RawHOSEvent(
+            "D",
+            datetime(2025, 7, 28, 14, 0, tzinfo=UTC),
+            device_id="v1",
+            odometer_m=None,
+        ),
+        RawHOSEvent(
+            "OFF",
+            datetime(2025, 7, 28, 16, 0, tzinfo=UTC),
+            device_id="v1",
+            odometer_m=None,
+        ),
+    ]
+    crumbs = [
+        GpsFix(
+            event_timestamp=datetime(2025, 7, 28, 13, 55, tzinfo=UTC),
+            latitude=31.76,
+            longitude=-106.48,
+            device_id="v1",
+            odometer_m=10_000.0,
+        ),
+        GpsFix(
+            event_timestamp=datetime(2025, 7, 28, 15, 55, tzinfo=UTC),
+            latitude=31.80,
+            longitude=-106.40,
+            device_id="v1",
+            odometer_m=26_093.44,
+        ),
+    ]
+    filled = fill_odometer_from_breadcrumbs(events, crumbs)
+    assert filled[0].odometer_m == 10_000.0
+    assert filled[1].odometer_m == 26_093.44
+    grid, totals, _ = build_day_points(
+        filled,
+        chicago_day_bounds(date(2025, 7, 28), ZoneInfo("America/Chicago")),
+    )
+    d_seg = next(e for e in grid if e["status"] == "D")
+    assert abs(d_seg["distance_m"] - 16093.44) < 0.01
+    assert abs(totals["distance_m"] - 16093.44) < 0.01
+
+
+def test_gps_haversine_distance_fallback_when_no_odometer() -> None:
+    bounds = chicago_day_bounds(date(2025, 7, 28), ZoneInfo("America/Chicago"))
+    events = [
+        RawHOSEvent(
+            "D",
+            datetime(2025, 7, 28, 14, 0, tzinfo=UTC),
+            device_id="v1",
+        ),
+        RawHOSEvent(
+            "OFF",
+            datetime(2025, 7, 28, 16, 0, tzinfo=UTC),
+            device_id="v1",
+        ),
+    ]
+    grid, totals, _ = build_day_points(events, bounds)
+    d_seg = next(e for e in grid if e["status"] == "D")
+    assert d_seg["distance_m"] == 0.0
+
+    # Two fixes ~11.1 km apart on a parallel near the equator approximation
+    lat0, lon0 = 31.7600, -106.4800
+    lat1, lon1 = 31.8600, -106.4800  # ~11.1 km north
+    expected_m = haversine_meters(lat0, lon0, lat1, lon1)
+    crumbs = [
+        GpsFix(
+            event_timestamp=datetime(2025, 7, 28, 14, 10, tzinfo=UTC),
+            latitude=lat0,
+            longitude=lon0,
+            device_id="v1",
+        ),
+        GpsFix(
+            event_timestamp=datetime(2025, 7, 28, 15, 10, tzinfo=UTC),
+            latitude=lat1,
+            longitude=lon1,
+            device_id="v1",
+        ),
+    ]
+    apply_gps_distance_fallback(grid, totals, crumbs)
+    d_seg = next(e for e in grid if e["status"] == "D")
+    assert abs(d_seg["distance_m"] - expected_m) < 1.0
+    assert d_seg["distance_label"]
+    assert abs(totals["distance_m"] - expected_m) < 1.0
+    assert abs(totals["D_m"] - expected_m) < 1.0
+
+
+def test_odometer_distance_unchanged_when_present() -> None:
+    """Geotab-style odometer path must not be overwritten by GPS fallback."""
+    bounds = chicago_day_bounds(date(2025, 7, 28), ZoneInfo("America/Chicago"))
+    events = [
+        RawHOSEvent("D", datetime(2025, 7, 28, 12, 0, tzinfo=UTC), odometer_m=10_000.0),
+        RawHOSEvent("OFF", datetime(2025, 7, 28, 14, 0, tzinfo=UTC), odometer_m=26_093.44),
+    ]
+    grid, totals, _ = build_day_points(events, bounds)
+    crumbs = [
+        GpsFix(
+            event_timestamp=datetime(2025, 7, 28, 12, 30, tzinfo=UTC),
+            latitude=0.0,
+            longitude=0.0,
+            device_id="v1",
+        ),
+        GpsFix(
+            event_timestamp=datetime(2025, 7, 28, 13, 30, tzinfo=UTC),
+            latitude=10.0,
+            longitude=10.0,
+            device_id="v1",
+        ),
+    ]
+    apply_gps_distance_fallback(grid, totals, crumbs)
+    d_seg = next(e for e in grid if e["status"] == "D")
+    assert abs(d_seg["distance_m"] - 16093.44) < 0.01
+    assert abs(totals["distance_m"] - 16093.44) < 0.01

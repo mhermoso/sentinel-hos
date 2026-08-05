@@ -13,14 +13,19 @@ PC plots on the OFF lane (striped); YM plots on the ON lane (striped).
 
 Distance uses odometer deltas on DutyStatusLog. The persisted field
 ``odometer_km`` holds **meters** (Geotab units; legacy field name).
+
+When odometer is missing (typical for historical Samsara HOS rows), the day
+API fills nearest breadcrumb odometer and falls back to GPS path distance
+(haversine along breadcrumbs in the segment window).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -48,6 +53,8 @@ LANE_FOR_STATUS: dict[str, str] = {
 }
 PLOT_STATUSES = frozenset(LANE_FOR_STATUS)
 METERS_PER_MILE = 1609.344
+# Mean Earth radius (WGS84) for GPS path distance fallback.
+_EARTH_RADIUS_M = 6_371_000.0
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_BACKTEST_DISPATCHES_PATH = _BACKEND_ROOT / "data" / "backtest_dispatches.json"
 
@@ -76,6 +83,17 @@ class RawHOSEvent:
     # Geotab odometer in meters (stored historically as odometer_km)
     odometer_m: float | None = None
     raw_payload: Mapping[str, Any] | None = field(default=None, hash=False)
+
+
+@dataclass(frozen=True)
+class GpsFix:
+    """Minimal GPS point for odometer join / path-distance fallback."""
+
+    event_timestamp: datetime
+    latitude: float
+    longitude: float
+    device_id: str | None = None
+    odometer_m: float | None = None
 
 
 @dataclass
@@ -135,6 +153,143 @@ def format_distance_mi(meters: float) -> str:
 
 def format_distance_km(meters: float) -> str:
     return f"{max(0.0, meters) / 1000.0:.1f} km"
+
+
+def haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in meters between two WGS84 points."""
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lambda = math.radians(lon2 - lon1)
+    a = (
+        math.sin(d_phi / 2.0) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2.0) ** 2
+    )
+    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
+    return _EARTH_RADIUS_M * c
+
+
+def fill_odometer_from_breadcrumbs(
+    events: Sequence[RawHOSEvent],
+    breadcrumbs: Sequence[GpsFix],
+) -> list[RawHOSEvent]:
+    """Fill missing HOS odometer from nearest breadcrumb reading at or before ts.
+
+    Prefer device-matched crumbs when ``device_id`` is set; otherwise use any
+    crumb with an odometer value.
+    """
+    with_odo = [c for c in breadcrumbs if c.odometer_m is not None]
+    if not with_odo:
+        return list(events)
+
+    by_device: dict[str, list[GpsFix]] = {}
+    for crumb in with_odo:
+        key = crumb.device_id or ""
+        by_device.setdefault(key, []).append(crumb)
+    for series in by_device.values():
+        series.sort(key=lambda c: _ensure_utc(c.event_timestamp))
+    all_sorted = sorted(with_odo, key=lambda c: _ensure_utc(c.event_timestamp))
+
+    filled: list[RawHOSEvent] = []
+    for event in events:
+        if event.odometer_m is not None:
+            filled.append(event)
+            continue
+        series = (
+            by_device.get(event.device_id or "", [])
+            if event.device_id
+            else all_sorted
+        )
+        if not series and event.device_id:
+            series = all_sorted
+        odo: float | None = None
+        target = _ensure_utc(event.event_timestamp)
+        for crumb in series:
+            if _ensure_utc(crumb.event_timestamp) <= target:
+                odo = crumb.odometer_m
+            else:
+                break
+        if odo is None:
+            filled.append(event)
+        else:
+            filled.append(replace(event, odometer_m=odo))
+    return filled
+
+
+def path_distance_meters(
+    breadcrumbs: Sequence[GpsFix],
+    start: datetime,
+    end: datetime,
+    *,
+    device_id: str | None = None,
+) -> float:
+    """Sum haversine meters along breadcrumbs in ``[start, end]``."""
+    start_utc = _ensure_utc(start)
+    end_utc = _ensure_utc(end)
+    points = [
+        c
+        for c in breadcrumbs
+        if start_utc <= _ensure_utc(c.event_timestamp) < end_utc
+        and (device_id is None or not c.device_id or c.device_id == device_id)
+    ]
+    points.sort(key=lambda c: _ensure_utc(c.event_timestamp))
+    if len(points) < 2:
+        return 0.0
+    total = 0.0
+    for idx in range(len(points) - 1):
+        a = points[idx]
+        b = points[idx + 1]
+        total += haversine_meters(a.latitude, a.longitude, b.latitude, b.longitude)
+    return total
+
+
+def _add_distance_to_totals(totals: dict[str, float], status: str, dist_m: float) -> None:
+    if dist_m <= 0:
+        return
+    totals["distance_m"] = totals.get("distance_m", 0.0) + dist_m
+    if status == "PC":
+        totals["OFF_m"] = totals.get("OFF_m", 0.0) + dist_m
+        totals["exemption_pc_m"] = totals.get("exemption_pc_m", 0.0) + dist_m
+    elif status == "YM":
+        totals["ON_m"] = totals.get("ON_m", 0.0) + dist_m
+        totals["exemption_ym_m"] = totals.get("exemption_ym_m", 0.0) + dist_m
+    elif status in GRID_STATUSES:
+        key = f"{status}_m"
+        totals[key] = totals.get(key, 0.0) + dist_m
+
+
+def apply_gps_distance_fallback(
+    grid_events: list[dict[str, Any]],
+    totals: dict[str, float],
+    breadcrumbs: Sequence[GpsFix],
+) -> None:
+    """Fill segment distance from GPS path when odometer delta is zero/missing.
+
+    Mutates ``grid_events`` and ``totals`` in place.
+    """
+    if not breadcrumbs or not grid_events:
+        return
+    for ev in grid_events:
+        if float(ev.get("distance_m") or 0.0) > 0:
+            continue
+        start = _ensure_utc(ev["event_timestamp"])
+        duration = float(ev.get("duration_seconds") or 0.0)
+        if duration <= 0:
+            continue
+        end = start + timedelta(seconds=duration)
+        dist_m = path_distance_meters(
+            breadcrumbs,
+            start,
+            end,
+            device_id=ev.get("device_id"),
+        )
+        if dist_m <= 0:
+            continue
+        ev["distance_m"] = dist_m
+        ev["distance_mi"] = round(dist_m / METERS_PER_MILE, 2)
+        ev["distance_km"] = round(dist_m / 1000.0, 2)
+        ev["distance_label"] = format_distance_mi(dist_m)
+        _add_distance_to_totals(totals, str(ev.get("status", "")), dist_m)
 
 
 def _is_non_duty(event: RawHOSEvent) -> bool:

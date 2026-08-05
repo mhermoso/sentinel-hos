@@ -389,6 +389,12 @@ async def _fetch_samsara_hos_window(
         len(valid_logs),
         page,
     )
+    if valid_logs:
+        valid_logs = await adapter.enrich_logs_with_odometer(
+            valid_logs,
+            start_str=start_str,
+            end_str=end_str,
+        )
     return valid_logs
 
 

@@ -102,6 +102,11 @@ class DCWGpsBreadcrumb(BaseModel):
         ge=0.0,
         description="Vehicle speed in km/h when reported by provider",
     )
+    odometer_m: float | None = Field(
+        None,
+        ge=0.0,
+        description="Vehicle odometer in meters when reported (Samsara OBD/GPS)",
+    )
     raw_payload: dict[str, Any] = Field(
         ..., description="Sanitised snapshot of original provider JSON payload"
     )

@@ -44,6 +44,13 @@ def _adapter_with_client(get_hos_logs: AsyncMock) -> SamsaraAdapter:
     adapter.fleet_id = "samsara:9005155"
     client = MagicMock()
     client.hours_of_service.get_hos_logs = get_hos_logs
+    # Default empty odometer history so fetch_feed enrichment is a no-op.
+    empty_odo = MagicMock()
+    empty_odo.data = []
+    empty_odo.pagination = MagicMock()
+    empty_odo.pagination.has_next_page = False
+    empty_odo.pagination.end_cursor = ""
+    client.vehicle_stats.get_vehicle_stats_history = AsyncMock(return_value=empty_odo)
     adapter.client = client
     return adapter
 
@@ -212,3 +219,47 @@ def test_overlapping_polls_produce_dedupable_raw_ids() -> None:
     b = map_samsara_log_to_canonical("samsara:9005155", driver, entry)
     assert a.raw_id == b.raw_id
     assert a.raw_id == "samsara:5250:2026-08-04T22:00:00.000Z:sleeperBed"
+
+
+@pytest.mark.asyncio
+async def test_fetch_gps_feed_merges_obd_odometer() -> None:
+    vehicle = MagicMock()
+    vehicle.model_dump = MagicMock(
+        return_value={
+            "id": "v99",
+            "name": "Unit 99",
+            "gps": [
+                {
+                    "time": "2026-08-05T12:00:00.000Z",
+                    "latitude": 31.76,
+                    "longitude": -106.48,
+                    "speedMilesPerHour": 40.0,
+                }
+            ],
+            "obdOdometerMeters": [
+                {"time": "2026-08-05T11:59:00.000Z", "value": 500_000},
+            ],
+            "gpsOdometerMeters": [
+                {"time": "2026-08-05T11:59:00.000Z", "value": 499_000},
+            ],
+        }
+    )
+    response = MagicMock()
+    response.data = [vehicle]
+    response.pagination = MagicMock()
+    response.pagination.has_next_page = False
+    response.pagination.end_cursor = "gps-cursor-1"
+
+    adapter = SamsaraAdapter()
+    adapter.fleet_id = "samsara:9005155"
+    client = MagicMock()
+    client.vehicle_stats.get_vehicle_stats_feed = AsyncMock(return_value=response)
+    adapter.client = client
+
+    records, cursor = await adapter.fetch_gps_feed("samsara:9005155", from_cursor="")
+    assert cursor == "gps-cursor-1"
+    assert len(records) == 1
+    assert records[0]["vehicleId"] == "v99"
+    assert records[0]["odometerMeters"] == 500_000.0
+    call_kwargs = client.vehicle_stats.get_vehicle_stats_feed.await_args.kwargs
+    assert call_kwargs["types"] == "gps,obdOdometerMeters,gpsOdometerMeters"

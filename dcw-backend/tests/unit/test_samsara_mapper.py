@@ -120,7 +120,23 @@ def test_map_samsara_gps_mph_to_kmh_and_raw_id() -> None:
     assert crumb.speed_kmh == pytest.approx(55.0 * 1.609344)
     assert crumb.latitude == 31.7619
     assert crumb.longitude == -106.4851
+    assert crumb.odometer_m is None
     assert crumb.event_timestamp == datetime(2026, 8, 4, 16, 0, 0, tzinfo=UTC)
+
+
+def test_map_samsara_gps_with_odometer_meters() -> None:
+    crumb = map_samsara_gps_to_breadcrumb(
+        fleet_id=FLEET_ID,
+        vehicle_id="281474990467032",
+        gps_entry={
+            "time": "2026-08-04T16:00:00Z",
+            "latitude": 31.76,
+            "longitude": -106.48,
+            "odometerMeters": 1_250_000,
+        },
+        driver_id="52501234",
+    )
+    assert crumb.odometer_m == 1_250_000.0
 
 
 def test_map_samsara_gps_rejects_zero_zero() -> None:
