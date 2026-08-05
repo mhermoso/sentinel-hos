@@ -132,9 +132,7 @@ def map_geotab_log_to_canonical(
         device_id = str(device_dict["id"])
 
     # Status mapping
-    canonical_status = _map_geotab_status(
-        raw_log.get("status"), raw_log.get("origin")
-    )
+    canonical_status = _map_geotab_status(raw_log.get("status"), raw_log.get("origin"))
 
     # Location extraction
     latitude, longitude = _extract_location(raw_log)
@@ -228,9 +226,7 @@ def map_geotab_log_record_to_breadcrumb(
         speed_kmh=float(raw["speed"]) if isinstance(raw.get("speed"), (int, float)) else None,
         raw_payload=sanitize_raw_payload(raw),
     )
-    return crumb.model_copy(
-        update={"event_timestamp": normalize_timestamp(crumb.event_timestamp)}
-    )
+    return crumb.model_copy(update={"event_timestamp": normalize_timestamp(crumb.event_timestamp)})
 
 
 # ── Adapter Class ────────────────────────────────────────────────────────
@@ -285,6 +281,12 @@ class GeotabAdapter(BaseTelematicsAdapter):
 
         Returns:
             Tuple of (validated canonical logs, next version token).
+
+        Cursor policy:
+            If any record in the batch fails validation/mapping, the returned
+            cursor is ``from_cursor`` (not Geotab's ``toVersion``). GetFeed does
+            not redeliver past an advanced version, and there is no durable DLQ
+            — advancing would permanently drop HOS events.
         """
         if self.api is None:
             await self.connect()
@@ -313,26 +315,48 @@ class GeotabAdapter(BaseTelematicsAdapter):
         to_version = feed_response.get("toVersion", from_cursor)
 
         valid_logs: List[DCWCanonicalHOSLog] = []
+        rejected = 0
 
         for record in records:
             record_id = record.get("id", "UNKNOWN_ID")
             try:
-                canonical_log = map_geotab_log_to_canonical(
-                    record, tenant_id=tenant_id
-                )
+                canonical_log = map_geotab_log_to_canonical(record, tenant_id=tenant_id)
                 valid_logs.append(canonical_log)
             except ValidationError as ve:
-                logger.warning(
-                    "Validation failed for record %s; isolated to DLQ: %s",
+                rejected += 1
+                # No durable DLQ exists — do not advance past this batch.
+                # Returning from_cursor makes GetFeed redeliver until mapping
+                # is fixed; valid siblings re-persist via ON CONFLICT DO NOTHING.
+                logger.error(
+                    "Validation failed for DutyStatusLog %s — holding cursor "
+                    "(fromVersion=%s, toVersion=%s); record will be redelivered: %s",
                     record_id,
+                    from_cursor,
+                    to_version,
                     ve.errors(),
                 )
             except Exception as exc:
-                logger.warning(
-                    "Unexpected parsing failure for record %s: %s",
+                rejected += 1
+                logger.error(
+                    "Unexpected parsing failure for DutyStatusLog %s — holding "
+                    "cursor (fromVersion=%s, toVersion=%s); record will be "
+                    "redelivered: %s",
                     record_id,
+                    from_cursor,
+                    to_version,
                     exc,
                 )
+
+        if rejected:
+            logger.error(
+                "Refusing GetFeed cursor advance: %d/%d DutyStatusLog record(s) "
+                "failed mapping (fromVersion=%s → toVersion=%s discarded)",
+                rejected,
+                len(records),
+                from_cursor,
+                to_version,
+            )
+            return valid_logs, str(from_cursor)
 
         return valid_logs, str(to_version)
 

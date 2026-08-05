@@ -101,8 +101,10 @@ async def poll_geotab_feed(ctx: dict[str, Any]) -> dict[str, Any]:
     )
 
     if not raw_logs:
-        logger.info("No new Geotab records (cursor=%s)", cursor)
-        # Still save cursor in case toVersion advanced
+        logger.info("No new Geotab records (cursor=%s → %s)", cursor, next_cursor)
+        # Adapter returns from_cursor when a batch had mapping failures so we
+        # do not skip unmapped HOS logs. Otherwise toVersion may still advance
+        # on an empty tip read.
         await IngestionRepository.save_cursor("geotab", tenant_id, next_cursor)
         return {"records_fetched": 0, "cursor": next_cursor}
 
@@ -157,13 +159,12 @@ async def poll_geotab_log_records(ctx: dict[str, Any]) -> dict[str, Any]:
 
     if not raw_records:
         logger.info("No new Geotab LogRecords (cursor=%s)", cursor)
-        await IngestionRepository.save_cursor(
-            LOG_RECORD_PROVIDER, tenant_id, next_cursor
-        )
+        await IngestionRepository.save_cursor(LOG_RECORD_PROVIDER, tenant_id, next_cursor)
         return {"records_fetched": 0, "cursor": next_cursor}
 
     breadcrumbs: list[DCWGpsBreadcrumb] = []
     device_driver_cache: dict[str, str] = {}
+    rejected = 0
 
     async with async_session_factory() as session:
         repo = IngestionRepository(session)
@@ -178,7 +179,11 @@ async def poll_geotab_log_records(ctx: dict[str, Any]) -> dict[str, Any]:
                 else:
                     device_id = ""
                 if not device_id:
-                    logger.warning("LogRecord %s missing device — skipped", record_id)
+                    rejected += 1
+                    logger.error(
+                        "LogRecord %s missing device — holding cursor for redelivery",
+                        record_id,
+                    )
                     continue
 
                 event_ts = record.get("dateTime")
@@ -187,7 +192,11 @@ async def poll_geotab_log_records(ctx: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(event_ts, datetime) and event_ts.tzinfo is None:
                     event_ts = event_ts.replace(tzinfo=UTC)
                 if not isinstance(event_ts, datetime):
-                    logger.warning("LogRecord %s missing dateTime — skipped", record_id)
+                    rejected += 1
+                    logger.error(
+                        "LogRecord %s missing dateTime — holding cursor for redelivery",
+                        record_id,
+                    )
                     continue
 
                 driver_id = await repo.resolve_driver_for_device(
@@ -196,19 +205,19 @@ async def poll_geotab_log_records(ctx: dict[str, Any]) -> dict[str, Any]:
                     as_of=event_ts,
                     cache=device_driver_cache,
                 )
-                crumb = map_geotab_log_record_to_breadcrumb(
-                    record, tenant_id=tenant_id, driver_id=driver_id
-                )
+                crumb = map_geotab_log_record_to_breadcrumb(record, tenant_id=tenant_id, driver_id=driver_id)
                 breadcrumbs.append(crumb)
             except ValidationError as ve:
-                logger.warning(
-                    "Validation failed for LogRecord %s: %s",
+                rejected += 1
+                logger.error(
+                    "Validation failed for LogRecord %s — holding cursor: %s",
                     record_id,
                     ve.errors(),
                 )
             except Exception as exc:
-                logger.warning(
-                    "Unexpected LogRecord parse failure for %s: %s",
+                rejected += 1
+                logger.error(
+                    "Unexpected LogRecord parse failure for %s — holding cursor: %s",
                     record_id,
                     exc,
                 )
@@ -216,20 +225,33 @@ async def poll_geotab_log_records(ctx: dict[str, Any]) -> dict[str, Any]:
         inserted = await repo.persist_gps_breadcrumbs(breadcrumbs)
         await session.commit()
 
-    await IngestionRepository.save_cursor(LOG_RECORD_PROVIDER, tenant_id, next_cursor)
+    # GetFeed will not redeliver past toVersion. Keep the prior cursor when any
+    # record in the batch failed so breadcrumbs are not permanently skipped.
+    cursor_to_save = cursor if rejected else next_cursor
+    if rejected:
+        logger.error(
+            "Refusing LogRecord cursor advance: %d/%d record(s) failed (fromVersion=%s → toVersion=%s discarded)",
+            rejected,
+            len(raw_records),
+            cursor,
+            next_cursor,
+        )
+    await IngestionRepository.save_cursor(LOG_RECORD_PROVIDER, tenant_id, cursor_to_save)
 
     logger.info(
-        "LogRecord poll complete: %d fetched, %d mapped, %d inserted, cursor=%s",
+        "LogRecord poll complete: %d fetched, %d mapped, %d inserted, rejected=%d, cursor=%s",
         len(raw_records),
         len(breadcrumbs),
         inserted,
-        next_cursor,
+        rejected,
+        cursor_to_save,
     )
     return {
         "records_fetched": len(raw_records),
         "records_mapped": len(breadcrumbs),
         "records_inserted": inserted,
-        "cursor": next_cursor,
+        "records_rejected": rejected,
+        "cursor": cursor_to_save,
     }
 
 
