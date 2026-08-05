@@ -258,6 +258,23 @@ class UnitListItemResponse(BaseModel):
     last_gps_lon: float | None = None
 
 
+class HomeUnitMapItemResponse(BaseModel):
+    """Unit marker payload for the Home fleet map."""
+
+    device_id: str
+    name: str | None = None
+    current_driver_id: str | None = None
+    current_driver_name: str | None = None
+    current_status: str | None = None
+    latitude: float
+    longitude: float
+    event_timestamp: datetime
+    warning_count: int = 0
+    violation_count: int = 0
+    latest_alert_severity: str | None = None
+    latest_alert_type: str | None = None
+
+
 class UnitDetailResponse(BaseModel):
     """Unit detail page payload."""
 

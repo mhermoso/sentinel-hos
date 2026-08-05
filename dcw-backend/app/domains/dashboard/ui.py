@@ -24,6 +24,7 @@ from app.domains.dashboard.alert_filters import (
     normalize_filter_str,
     quick_range_dates,
 )
+from app.domains.dashboard.day_builder import chicago_day_bounds
 from app.domains.dashboard.driver_clocks import (
     DriverDayClocks,
     build_driver_day_clocks,
@@ -32,6 +33,10 @@ from app.domains.dashboard.driver_clocks import (
 from app.domains.dashboard.driver_filters import filter_drivers
 from app.domains.dashboard.driver_names import resolve_driver_name
 from app.domains.dashboard.fleet_select import resolve_fleet, set_fleet_cookie
+from app.domains.dashboard.home_unit_filters import (
+    alert_stats_by_driver,
+    split_units_for_home,
+)
 from app.domains.dashboard.ops_feed import (
     LogFilter,
     infer_worker_status,
@@ -41,13 +46,11 @@ from app.domains.dashboard.ops_feed import (
     rows_from_ingestion,
     rows_from_ops,
 )
-from app.domains.dashboard.day_builder import chicago_day_bounds
 from app.domains.dashboard.profile import build_contact_profile
 from app.domains.dashboard.route_builder import build_day_route_payload
 from app.domains.dashboard.router import (
     _build_driver_day,
     _list_all_drivers,
-    get_driver_positions,
     get_recent_ingestion,
     list_audit_records,
     list_fleet_alerts,
@@ -125,13 +128,14 @@ async def ui_home(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    """Fleet home: map, 30d warning/violation summary, live ingestion feed."""
+    """Fleet home: unit map, 30d warning/violation summary, live ingestion feed."""
     base_ctx = await _base_context(request)
     display_tz = base_ctx["timezone"]
+    tenant_id = base_ctx["active_fleet"].fleet_id
     from_d, to_d = default_alerts_local_range(display_tz)
     from_ts, to_ts = local_dates_to_utc_window(from_d, to_d, display_tz)
 
-    positions_resp = await get_driver_positions(request=request, session=session)
+    units = await list_units_for_tenant(session, tenant_id)
     alerts_resp = await list_fleet_alerts(
         request=request,
         severity=None,
@@ -149,10 +153,9 @@ async def ui_home(
     violation_count = sum(
         1 for a in alerts_resp.alerts if str(a.severity).upper() == "VIOLATION"
     )
-    positioned_ids = {p.driver_id for p in positions_resp.positions}
-    all_drivers = await _list_all_drivers(session, base_ctx["active_fleet"].fleet_id)
-    no_location = [d for d in all_drivers if d.driver_id not in positioned_ids]
-    positions_json = [p.model_dump(mode="json") for p in positions_resp.positions]
+    by_driver = alert_stats_by_driver(alerts_resp.alerts)
+    units_with_gps, no_location = split_units_for_home(units, by_driver)
+    units_json = [u.model_dump(mode="json") for u in units_with_gps]
     health = await _health_context(session)
     feed_resp = await get_recent_ingestion(request=request, limit=20, session=session)
     feed_newest_raw_id = feed_resp.events[0].raw_id if feed_resp.events else ""
@@ -161,8 +164,8 @@ async def ui_home(
         request,
         "home.html",
         {
-            "positions": positions_resp.positions,
-            "positions_json": positions_json,
+            "units": units_with_gps,
+            "units_json": units_json,
             "no_location": no_location,
             "warning_count": warning_count,
             "violation_count": violation_count,

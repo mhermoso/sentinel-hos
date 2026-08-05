@@ -30,14 +30,14 @@
 
 <section class="panel">
   <div class="panel-meta">
-    <span id="home-map-visible-count">{{ positions|length }} drivers with location</span>
+    <span id="home-map-visible-count">{{ units|length }} units with location</span>
     <span>{{ no_location|length }} without coordinates</span>
     <button type="button" id="home-map-clear-filters" class="map-clear-filters" hidden>Clear filters</button>
   </div>
   <div class="home-map-wrap">
-    <div id="home-map" class="home-map" role="img" aria-label="Driver locations map"
+    <div id="home-map" class="home-map" role="img" aria-label="Unit locations map"
          data-display-tz="{{ timezone }}"
-         data-positions='{{ positions_json | tojson }}'></div>
+         data-units='{{ units_json | tojson }}'></div>
     <ul class="map-legend" aria-label="Map legend filters">
       <li>
         <button type="button" class="map-legend-btn" data-filter-status="OFF" aria-pressed="false">
@@ -83,21 +83,20 @@
       </li>
     </ul>
   </div>
-  {% if positions %}
+  {% if units %}
   <div class="map-drivers-wrap">
     <div class="map-drivers-label">
-      <span>Located drivers · click to zoom</span>
+      <span>Located units · click to zoom</span>
       <div class="map-filter-toggles">
-        <button type="button" id="home-map-on-unit" class="map-filter-toggle is-active"
-                aria-pressed="true" data-filter-on-unit="1">On a unit</button>
-        <button type="button" id="home-map-named-only" class="map-filter-toggle is-active"
-                aria-pressed="true" data-filter-named="1">Named only</button>
+        <button type="button" id="home-map-has-driver" class="map-filter-toggle is-active"
+                aria-pressed="true" data-filter-has-driver="1">Has driver</button>
+        <button type="button" id="home-map-known-status" class="map-filter-toggle is-active"
+                aria-pressed="true" data-filter-known-status="1">Known status</button>
       </div>
     </div>
-    <ul id="home-map-drivers" class="map-drivers" aria-label="Drivers with location">
-      {% for p in positions %}
-      {% if not (p.latitude == 0 and p.longitude == 0) %}
-      {% set st = (p.status or 'UNKNOWN')|upper %}
+    <ul id="home-map-units" class="map-drivers" aria-label="Units with location">
+      {% for u in units %}
+      {% set st = (u.current_status or 'UNKNOWN')|upper %}
       {% if st == 'PC' %}{% set sk = 'OFF' %}
       {% elif st == 'YM' %}{% set sk = 'ON' %}
       {% elif st in ['OFF', 'SB', 'D', 'ON', 'UNKNOWN'] %}{% set sk = st %}
@@ -108,39 +107,41 @@
       {% elif sk == 'ON' %}{% set sc = 'status-on' %}
       {% else %}{% set sc = 'status-unknown' %}{% endif %}
       <li>
-        <button type="button" class="map-driver-row" data-focus-driver="{{ p.driver_id }}"
-                data-status-key="{{ sk }}"{% if p.driver_name %} data-has-name="1"{% else %} data-has-name="0"{% endif %}{% if p.has_unit_assignment %} data-has-unit="1"{% else %} data-has-unit="0"{% endif %}>
+        <button type="button" class="map-driver-row" data-focus-unit="{{ u.device_id }}"
+                data-status-key="{{ sk }}"{% if u.current_driver_id %} data-has-driver="1"{% else %} data-has-driver="0"{% endif %}{% if sk != 'UNKNOWN' %} data-known-status="1"{% else %} data-known-status="0"{% endif %}>
           <span class="hos-marker {{ sc }}" aria-hidden="true"></span>
           <span class="map-driver-text">
-            <span class="map-driver-name">{{ p.driver_name or p.driver_id }}{% if p.unit_label %} · {{ p.unit_label }}{% endif %}</span>
-            {% if p.driver_name %}<span class="muted mono map-driver-id">{{ p.driver_id }}</span>{% endif %}
+            <span class="map-driver-name">{{ u.name or u.device_id }}{% if u.current_driver_name or u.current_driver_id %} · {{ u.current_driver_name or u.current_driver_id }}{% endif %}{% if u.current_status %} · {{ u.current_status }}{% endif %}</span>
+            {% if u.name %}<span class="muted mono map-driver-id">{{ u.device_id }}</span>{% endif %}
           </span>
-          {% if p.warning_count and p.warning_count > 0 %}
-          <span class="hos-marker-badge warn" title="{{ p.warning_count }}W">W</span>
+          {% if u.warning_count and u.warning_count > 0 %}
+          <span class="hos-marker-badge warn" title="{{ u.warning_count }}W">W</span>
           {% endif %}
-          {% if p.violation_count and p.violation_count > 0 %}
-          <span class="hos-marker-badge viol" title="{{ p.violation_count }}V">V</span>
+          {% if u.violation_count and u.violation_count > 0 %}
+          <span class="hos-marker-badge viol" title="{{ u.violation_count }}V">V</span>
           {% endif %}
         </button>
       </li>
-      {% endif %}
       {% endfor %}
     </ul>
   </div>
   {% endif %}
   {% if no_location %}
   <details class="no-location">
-    <summary>No location · {{ no_location|length }} driver{{ "s" if no_location|length != 1 else "" }}</summary>
+    <summary>No location · {{ no_location|length }} unit{{ "s" if no_location|length != 1 else "" }}</summary>
     <div class="no-location-grid">
-      {% for d in no_location %}
-      <a class="no-location-item" href="/ui/drivers/{{ d.driver_id }}?date={{ today }}">
-        {% if d.driver_name %}
-        <span class="no-location-name">{{ d.driver_name }}</span>
-        <span class="muted mono no-location-id">{{ d.driver_id }}</span>
+      {% for u in no_location %}
+      <a class="no-location-item" href="/ui/units/{{ u.device_id }}">
+        {% if u.name %}
+        <span class="no-location-name">{{ u.name }}</span>
+        <span class="muted mono no-location-id">{{ u.device_id }}</span>
         {% else %}
-        <span class="mono no-location-id">{{ d.driver_id }}</span>
+        <span class="mono no-location-id">{{ u.device_id }}</span>
         {% endif %}
-        {% if d.current_status %}<span class="badge hist">{{ d.current_status }}</span>{% endif %}
+        {% if u.current_driver_name or u.current_driver_id %}
+        <span class="muted">{{ u.current_driver_name or u.current_driver_id }}</span>
+        {% endif %}
+        {% if u.current_status %}<span class="badge hist">{{ u.current_status }}</span>{% endif %}
       </a>
       {% endfor %}
     </div>

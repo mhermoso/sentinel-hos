@@ -33,7 +33,7 @@
         <th data-sort-key="assignees" data-sort-as="number" aria-sort="none">
           <button type="button" class="sort-btn" data-label="Assignees">Assignees</button>
         </th>
-        <th data-sort-key="gps" data-sort-as="text" aria-sort="none">
+        <th data-sort-key="gps" data-sort-as="time" aria-sort="none">
           <button type="button" class="sort-btn" data-label="Last GPS">Last GPS</button>
         </th>
       </tr>
@@ -48,8 +48,13 @@
       </tr>
       {% endif %}
       {% for u in units %}
-      <tr>
-        <td data-sort-value="{{ u.name or u.device_id }}">
+      <tr data-sortable-row
+          data-sort-unit="{{ (u.name or u.device_id)|lower }}|{{ u.device_id|lower }}"
+          data-sort-driver="{{ (u.current_driver_name or u.current_driver_id or '')|lower }}|{{ (u.current_driver_id or '')|lower }}"
+          data-sort-status="{{ (u.current_status or '')|lower }}"
+          data-sort-assignees="{{ u.assignee_count }}"
+          data-sort-gps="{{ u.last_gps_at.isoformat() if u.last_gps_at else '' }}">
+        <td>
           <a class="driver-link" href="/ui/units/{{ u.device_id }}">{{ u.name or u.device_id }}</a>
           {% if u.name %}
           <div class="muted small mono">{{ u.device_id }}</div>
@@ -58,7 +63,7 @@
           <div class="muted small">VIN {{ u.vin }}</div>
           {% endif %}
         </td>
-        <td data-sort-value="{{ u.current_driver_name or u.current_driver_id or '' }}">
+        <td>
           {% if u.current_driver_id %}
           <a class="driver-link" href="/ui/drivers/{{ u.current_driver_id }}">
             {{ u.current_driver_name or u.current_driver_id }}
@@ -67,15 +72,15 @@
           <span class="muted">—</span>
           {% endif %}
         </td>
-        <td data-sort-value="{{ u.current_status or '' }}">
+        <td>
           {% if u.current_status %}
           <span class="status-chip status-{{ u.current_status }}">{{ u.current_status }}</span>
           {% else %}
           <span class="muted">—</span>
           {% endif %}
         </td>
-        <td data-sort-value="{{ u.assignee_count }}">{{ u.assignee_count }}</td>
-        <td data-sort-value="{{ u.last_gps_at.isoformat() if u.last_gps_at else '' }}">
+        <td>{{ u.assignee_count }}</td>
+        <td>
           {% if u.last_gps_at %}
           <span title="{{ u.last_gps_lat }}, {{ u.last_gps_lon }}">
             {{ u.last_gps_at | local_dt }}
