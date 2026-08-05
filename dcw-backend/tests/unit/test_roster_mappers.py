@@ -210,9 +210,11 @@ def test_map_samsara_vehicle() -> None:
     entry = map_samsara_vehicle_to_roster_entry(
         {"id": "v1", "name": "Truck", "vin": "VIN"},
         tenant_id="samsara:1",
+        current_driver_id="52501234",
     )
     assert entry is not None
     assert entry.external_device_id == "v1"
+    assert entry.current_driver_id == "52501234"
     assert map_samsara_vehicle_to_roster_entry({"id": "0"}, tenant_id="t") is None
 
 

@@ -178,14 +178,18 @@ def place_alert_points(
 
 def build_day_route_payload(
     *,
-    driver_id: str,
+    driver_id: str = "",
     local_date,
     breadcrumbs: Sequence[dict[str, Any]],
     hos_events: Sequence[dict[str, Any]],
     alert_markers: Sequence[dict[str, Any]],
     carry_forward_status: str | None = None,
+    device_id: str | None = None,
 ) -> dict[str, Any]:
-    """Assemble segments + alerts + meta for the day route API."""
+    """Assemble segments + alerts + meta for the day route API.
+
+    Pass ``device_id`` for unit-centric routes (``driver_id`` may be empty).
+    """
     status_at = build_status_lookup(hos_events, carry_forward_status)
     downsampled = downsample_breadcrumbs(list(breadcrumbs), status_at)
     segments = build_route_segments(downsampled, status_at)
@@ -206,6 +210,7 @@ def build_day_route_payload(
         "alerts": alerts,
         "meta": {
             "driver_id": driver_id,
+            "device_id": device_id,
             "date": local_date,
             "point_count": point_count,
             "segment_count": len(segments),

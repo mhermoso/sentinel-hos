@@ -1,18 +1,27 @@
+{% set route_subject = route.meta.device_id or route.meta.driver_id %}
+{% set is_unit_route = route.meta.device_id %}
 <div class="route-map-detail" id="route-map-root" data-route-detail {% if full_page %}data-full-page{% endif %}>
   {% if not full_page %}
   <div class="route-map-detail-head">
     <div>
       <p class="muted small">Route map</p>
-      <h2>{{ route.meta.driver_id }} · {{ route.meta.date }}</h2>
+      <h2>{{ route_subject }} · {{ route.meta.date }}</h2>
       <p class="muted small">
         {{ route.meta.point_count }} GPS points
         · {{ route.meta.segment_count }} segments
       </p>
     </div>
+    {% if is_unit_route %}
+    <a class="btn-sm"
+       href="/ui/units/{{ route.meta.device_id }}/route?date={{ route.meta.date }}">
+      Full page
+    </a>
+    {% else %}
     <a class="btn-sm"
        href="/ui/drivers/{{ route.meta.driver_id }}/route?date={{ route.meta.date }}">
       Full page
     </a>
+    {% endif %}
   </div>
   {% endif %}
 
@@ -29,7 +38,9 @@
     </p>
   </div>
   {% else %}
-  <div class="route-map-host" data-route-map data-driver-id="{{ route.meta.driver_id }}">
+  <div class="route-map-host" data-route-map
+       {% if route.meta.driver_id %}data-driver-id="{{ route.meta.driver_id }}"{% endif %}
+       {% if route.meta.device_id %}data-device-id="{{ route.meta.device_id }}"{% endif %}>
     <script type="application/json">{{ route_json | tojson }}</script>
   </div>
   <ul class="route-legend" aria-label="Route map legend">

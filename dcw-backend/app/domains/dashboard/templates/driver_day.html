@@ -37,6 +37,12 @@
   </div>
 </section>
 
+<section class="panel profile-panel profile-panel-compact">
+  {% with full_profile_page=false %}
+  {% include "partials/driver_profile_fields.html" %}
+  {% endwith %}
+</section>
+
 <section
   id="day-panel"
   class="panel"

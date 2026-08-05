@@ -98,3 +98,30 @@ def test_build_day_route_empty_coverage_note() -> None:
     assert payload["meta"]["point_count"] == 0
     assert "unavailable" in payload["meta"]["coverage_note"].lower()
     assert payload["segments"] == []
+
+
+def test_build_day_route_device_centric_meta() -> None:
+    t0 = datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
+    t1 = datetime(2026, 7, 30, 12, 5, tzinfo=UTC)
+    payload = build_day_route_payload(
+        driver_id="",
+        device_id="dev-9",
+        local_date="2026-07-30",
+        breadcrumbs=[
+            {"event_timestamp": t0, "latitude": 41.0, "longitude": -87.0},
+            {"event_timestamp": t1, "latitude": 41.01, "longitude": -87.01},
+        ],
+        hos_events=[
+            {
+                "event_timestamp": t0,
+                "status": "D",
+                "latitude": 41.0,
+                "longitude": -87.0,
+            }
+        ],
+        alert_markers=[],
+    )
+    assert payload["meta"]["device_id"] == "dev-9"
+    assert payload["meta"]["driver_id"] == ""
+    assert payload["meta"]["point_count"] == 2
+    assert payload["meta"]["segment_count"] >= 1

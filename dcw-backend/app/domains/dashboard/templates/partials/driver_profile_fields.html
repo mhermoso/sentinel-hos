@@ -1,0 +1,75 @@
+<div class="profile-fields" data-profile-panel>
+  <div class="profile-fields-head">
+    <div class="profile-badges">
+      {% if profile.roster_found %}
+        {% if profile.profile_complete %}
+        <span class="badge ok">Complete</span>
+        {% else %}
+        <span class="badge warn">Incomplete</span>
+        {% endif %}
+        {% if profile.is_active %}
+        <span class="badge live">Active</span>
+        {% else %}
+        <span class="badge hist">Inactive</span>
+        {% endif %}
+      {% else %}
+        <span class="badge hist">No roster row</span>
+      {% endif %}
+    </div>
+    {% if not full_profile_page %}
+    <a class="btn-sm" href="/ui/drivers/{{ profile.driver_id }}/profile">Full profile</a>
+    {% endif %}
+  </div>
+
+  {% if not profile.roster_found %}
+  <p class="muted">
+    No roster row for this driver yet. Run <code>make sync-roster</code> after configuring Geotab/Samsara.
+  </p>
+  {% else %}
+  <dl class="profile-dl">
+    <div>
+      <dt>Display name</dt>
+      <dd>{{ profile.display_name or "—" }}</dd>
+    </div>
+    <div>
+      <dt>First / last</dt>
+      <dd>
+        {% if profile.first_name or profile.last_name %}
+          {{ profile.first_name or "—" }} {{ profile.last_name or "" }}
+        {% else %}
+          —
+        {% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>Phone</dt>
+      <dd>
+        {% if profile.phone_e164 %}
+        <a href="tel:{{ profile.phone_e164 }}">{{ profile.phone_e164 }}</a>
+        {% else %}
+        <span class="muted">—</span>
+        {% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>Assigned unit</dt>
+      <dd>
+        {% if profile.has_unit_assignment and profile.current_device_id %}
+          <a class="driver-link" href="/ui/units/{{ profile.current_device_id }}">
+            {{ profile.unit_label or profile.current_device_id }}
+          </a>
+          {% if profile.unit_label %}
+          <span class="muted small"> · {{ profile.current_device_id }}</span>
+          {% endif %}
+        {% else %}
+          <span class="muted">Unassigned</span>
+        {% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>Device id</dt>
+      <dd class="mono">{{ profile.current_device_id or "—" }}</dd>
+    </div>
+  </dl>
+  {% endif %}
+</div>

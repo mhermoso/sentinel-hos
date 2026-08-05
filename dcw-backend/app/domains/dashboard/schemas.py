@@ -42,6 +42,25 @@ class DriverListItemResponse(BaseModel):
     unit_label: str | None = None
 
 
+class DriverContactProfile(BaseModel):
+    """Roster contact/assignment panel (dashboard only — not engine DriverProfile).
+
+    All fields are optional so a missing roster row still renders gracefully.
+    """
+
+    driver_id: str
+    display_name: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    phone_e164: str | None = None
+    current_device_id: str | None = None
+    unit_label: str | None = None
+    profile_complete: bool | None = None
+    has_unit_assignment: bool | None = None
+    is_active: bool | None = None
+    roster_found: bool = False
+
+
 class DriverListResponse(BaseModel):
     """All drivers with HOS history and/or live activity."""
 
@@ -187,9 +206,10 @@ class RouteAlertPointResponse(BaseModel):
 
 
 class DriverDayRouteMeta(BaseModel):
-    """Metadata for a driver-day route response."""
+    """Metadata for a driver-day (or device-day) route response."""
 
-    driver_id: str
+    driver_id: str = ""
+    device_id: str | None = None
     date: date
     point_count: int = 0
     segment_count: int = 0
@@ -203,6 +223,53 @@ class DriverDayRouteResponse(BaseModel):
     segments: list[RouteSegmentResponse] = Field(default_factory=list)
     alerts: list[RouteAlertPointResponse] = Field(default_factory=list)
     meta: DriverDayRouteMeta
+
+
+class UnitAssigneeResponse(BaseModel):
+    """Driver roster row currently pointing at a unit."""
+
+    driver_id: str
+    display_name: str | None = None
+    phone_e164: str | None = None
+    is_active: bool | None = None
+
+
+class UnitGpsPointResponse(BaseModel):
+    """Latest known GPS for a unit."""
+
+    latitude: float
+    longitude: float
+    event_timestamp: datetime
+    driver_id: str | None = None
+
+
+class UnitListItemResponse(BaseModel):
+    """Row for the Units list page."""
+
+    device_id: str
+    name: str | None = None
+    vin: str | None = None
+    current_driver_id: str | None = None
+    current_driver_name: str | None = None
+    current_status: str | None = None
+    assignee_count: int = 0
+    last_gps_at: datetime | None = None
+    last_gps_lat: float | None = None
+    last_gps_lon: float | None = None
+
+
+class UnitDetailResponse(BaseModel):
+    """Unit detail page payload."""
+
+    device_id: str
+    name: str | None = None
+    vin: str | None = None
+    provider: str | None = None
+    current_driver_id: str | None = None
+    current_driver_name: str | None = None
+    current_status: str | None = None
+    assignees: list[UnitAssigneeResponse] = Field(default_factory=list)
+    last_gps: UnitGpsPointResponse | None = None
 
 
 class AlertMarkersResponse(BaseModel):

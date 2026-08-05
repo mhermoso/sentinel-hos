@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""One-shot sync of Geotab + Samsara driver rosters into ``driver_roster``.
+"""One-shot sync of Geotab + Samsara driver + vehicle rosters.
 
-Product path used by ``make sync-roster`` and the ARQ cron
-(``sync_driver_rosters``). Motive is skipped until its adapter is live.
+Writes ``driver_roster`` and ``vehicle_roster``. Product path used by
+``make sync-roster`` and the ARQ cron (``sync_driver_rosters``). Motive is
+skipped until its adapter is live.
 """
 
 from __future__ import annotations
@@ -63,7 +64,11 @@ async def main() -> int:
     result = await sync_driver_rosters(ctx)
     for fleet_result in result.get("fleets", []):
         logger.info("Fleet result: %s", fleet_result)
-    logger.info("Upserted total: %s", result.get("upserted_total"))
+    logger.info(
+        "Upserted drivers=%s vehicles=%s",
+        result.get("upserted_total"),
+        result.get("vehicles_upserted_total"),
+    )
     return 0
 
 

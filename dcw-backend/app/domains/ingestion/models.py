@@ -4,10 +4,11 @@
 ``gps_breadcrumbs`` — immutable GPS trail points (ADR-007); engine never reads.
 ``fleets`` — mutable registry of telematics connections (one row per fleet).
 ``driver_roster`` — mutable provider-agnostic driver contact/assignment cache.
+``vehicle_roster`` — mutable provider-agnostic unit/vehicle cache.
 
 SQL UPDATE and DELETE are blocked by PostgreSQL triggers attached in ``init_db``
-for the append-only tables; ``fleets`` and ``driver_roster`` are mutable with
-no append-only trigger.
+for the append-only tables; ``fleets``, ``driver_roster``, and ``vehicle_roster``
+are mutable with no append-only trigger.
 """
 
 from __future__ import annotations
@@ -97,6 +98,69 @@ class DriverRosterRecord(Base):
         return (
             f"<DriverRosterRecord provider={self.provider} "
             f"driver={self.external_driver_id} active={self.is_active}>"
+        )
+
+
+class VehicleRosterRecord(Base):
+    """Mutable per-device vehicle roster row (unit label / VIN / driver link).
+
+    Keyed by ``(provider, tenant_id, external_device_id)``. Created via
+    ``init_db`` / ``Base.metadata.create_all``, or
+    ``deploy/migrations/2026-08-05_vehicle_roster.sql`` for existing DBs.
+    """
+
+    __tablename__ = "vehicle_roster"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    provider = Column(String(32), nullable=False)
+    tenant_id = Column(String(128), nullable=False)
+    external_device_id = Column(String(128), nullable=False)
+    name = Column(String(512), nullable=True)
+    vin = Column(String(64), nullable=True)
+    current_driver_id = Column(String(128), nullable=True)
+    synced_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("NOW()"),
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("NOW()"),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("NOW()"),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "tenant_id",
+            "external_device_id",
+            name="uq_vehicle_roster_provider_tenant_external",
+        ),
+        Index(
+            "ix_vehicle_roster_tenant_external",
+            "tenant_id",
+            "external_device_id",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<VehicleRosterRecord provider={self.provider} "
+            f"device={self.external_device_id} name={self.name}>"
         )
 
 

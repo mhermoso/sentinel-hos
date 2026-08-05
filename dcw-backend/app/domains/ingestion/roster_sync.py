@@ -1,4 +1,4 @@
-"""ARQ/cron roster sync — upserts ``driver_roster`` from provider adapters.
+"""ARQ/cron roster sync — upserts ``driver_roster`` + ``vehicle_roster``.
 
 Never filters or drops HOS events. Motive fleets are skipped until the
 adapter implements roster fetch (same idle pattern as HOS poll).
@@ -13,6 +13,7 @@ from app.core.database import async_session_factory
 from app.domains.ingestion.adapters import BaseTelematicsAdapter
 from app.domains.ingestion.fleets import list_enabled_fleets
 from app.domains.ingestion.roster_repository import RosterRepository
+from app.domains.ingestion.vehicle_roster_repository import VehicleRosterRepository
 
 logger = logging.getLogger("dcw.ingestion.roster_sync")
 
@@ -22,9 +23,9 @@ async def sync_fleet_roster(
     *,
     tenant_id: str,
 ) -> dict[str, Any]:
-    """Fetch driver roster for one fleet and upsert into Postgres."""
+    """Fetch driver + vehicle rosters for one fleet and upsert into Postgres."""
     try:
-        entries = await adapter.fetch_driver_roster(tenant_id)
+        driver_entries = await adapter.fetch_driver_roster(tenant_id)
     except NotImplementedError:
         logger.info(
             "Roster sync skipped — adapter %s not implemented (tenant=%s)",
@@ -37,11 +38,28 @@ async def sync_fleet_roster(
             "skipped": True,
             "reason": "not_implemented",
             "upserted": 0,
+            "vehicles_upserted": 0,
         }
 
+    vehicle_entries = []
+    vehicles_skipped_reason: str | None = None
+    try:
+        vehicle_entries = await adapter.fetch_vehicle_roster(tenant_id)
+    except NotImplementedError:
+        vehicles_skipped_reason = "not_implemented"
+        logger.info(
+            "Vehicle roster sync skipped — adapter %s not implemented (tenant=%s)",
+            adapter.provider_name,
+            tenant_id,
+        )
+
     async with async_session_factory() as session:
-        repo = RosterRepository(session)
-        upserted = await repo.upsert_entries(entries)
+        driver_repo = RosterRepository(session)
+        upserted = await driver_repo.upsert_entries(driver_entries)
+        vehicles_upserted = 0
+        if vehicles_skipped_reason is None:
+            vehicle_repo = VehicleRosterRepository(session)
+            vehicles_upserted = await vehicle_repo.upsert_entries(vehicle_entries)
         await session.commit()
 
     return {
@@ -49,9 +67,11 @@ async def sync_fleet_roster(
         "tenant_id": tenant_id,
         "skipped": False,
         "upserted": upserted,
-        "active": sum(1 for e in entries if e.is_active),
-        "complete": sum(1 for e in entries if e.profile_complete),
-        "with_unit": sum(1 for e in entries if e.has_unit_assignment),
+        "vehicles_upserted": vehicles_upserted,
+        "vehicles_skipped": vehicles_skipped_reason,
+        "active": sum(1 for e in driver_entries if e.is_active),
+        "complete": sum(1 for e in driver_entries if e.profile_complete),
+        "with_unit": sum(1 for e in driver_entries if e.has_unit_assignment),
     }
 
 
@@ -87,6 +107,7 @@ async def sync_driver_rosters(ctx: dict[str, Any]) -> dict[str, Any]:
                     "skipped": True,
                     "reason": "adapter_unavailable",
                     "upserted": 0,
+                    "vehicles_upserted": 0,
                 }
             )
             continue
@@ -108,13 +129,20 @@ async def sync_driver_rosters(ctx: dict[str, Any]) -> dict[str, Any]:
                     "reason": "error",
                     "error": str(exc),
                     "upserted": 0,
+                    "vehicles_upserted": 0,
                 }
             )
 
     upserted_total = sum(int(r.get("upserted") or 0) for r in results)
+    vehicles_total = sum(int(r.get("vehicles_upserted") or 0) for r in results)
     logger.info(
-        "Roster sync complete: fleets=%d upserted=%d",
+        "Roster sync complete: fleets=%d drivers_upserted=%d vehicles_upserted=%d",
         len(results),
         upserted_total,
+        vehicles_total,
     )
-    return {"fleets": results, "upserted_total": upserted_total}
+    return {
+        "fleets": results,
+        "upserted_total": upserted_total,
+        "vehicles_upserted_total": vehicles_total,
+    }

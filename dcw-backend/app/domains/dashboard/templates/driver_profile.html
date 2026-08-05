@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Profile · {{ driver_name or driver_id }} — Sentinel HOS{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <div>
+    <a class="back" href="/ui/drivers/{{ driver_id }}">← Day view</a>
+    <h1>{{ driver_name or driver_id }}</h1>
+    <p class="lede muted">Driver contact &amp; unit assignment (roster cache)</p>
+  </div>
+</section>
+
+<section class="panel profile-panel">
+  {% with full_profile_page=true %}
+  {% include "partials/driver_profile_fields.html" %}
+  {% endwith %}
+</section>
+{% endblock %}

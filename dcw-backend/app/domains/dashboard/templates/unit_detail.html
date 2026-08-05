@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}{{ unit.name or unit.device_id }} — Unit — Sentinel HOS{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="/static/route_map.js" defer></script>
+{% endblock %}
+
+{% block content %}
+<section class="page-head day-head">
+  <div>
+    <a class="back" href="/ui/units">← Units</a>
+    <h1>{{ unit.name or unit.device_id }}</h1>
+    <p class="lede muted">
+      <span class="mono">{{ unit.device_id }}</span>
+      {% if unit.vin %} · VIN {{ unit.vin }}{% endif %}
+      {% if unit.provider %} · {{ unit.provider }}{% endif %}
+      {% if unit.current_status %}
+      · <span class="status-chip status-{{ unit.current_status }}">{{ unit.current_status }}</span>
+      {% endif %}
+    </p>
+  </div>
+  <div class="date-nav">
+    <a class="btn-sm" href="/ui/units/{{ unit.device_id }}?date={{ prev_date }}">← Prev</a>
+    <form class="date-form" method="get" action="/ui/units/{{ unit.device_id }}">
+      <input type="date" name="date" value="{{ local_date.isoformat() }}" onchange="this.form.submit()" />
+    </form>
+    <a class="btn-sm" href="/ui/units/{{ unit.device_id }}?date={{ next_date }}">Next →</a>
+    <a class="btn-sm" href="/ui/units/{{ unit.device_id }}?date={{ today }}">Today</a>
+    <button type="button" class="btn-sm"
+            data-route-open
+            data-device-id="{{ unit.device_id }}"
+            data-date="{{ local_date.isoformat() }}">Route map</button>
+  </div>
+</section>
+
+<section class="panel profile-panel">
+  <div class="profile-fields">
+    <dl class="profile-dl">
+      <div>
+        <dt>Current / last driver</dt>
+        <dd>
+          {% if unit.current_driver_id %}
+          <a class="driver-link" href="/ui/drivers/{{ unit.current_driver_id }}">
+            {{ unit.current_driver_name or unit.current_driver_id }}
+          </a>
+          <a class="btn-sm" href="/ui/drivers/{{ unit.current_driver_id }}/profile">Profile</a>
+          {% else %}
+          <span class="muted">Unknown</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Status</dt>
+        <dd>
+          {% if unit.current_status %}
+          <span class="status-chip status-{{ unit.current_status }}">{{ unit.current_status }}</span>
+          <span class="muted small"> (driver's latest duty status)</span>
+          {% else %}
+          <span class="muted">—</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Last GPS</dt>
+        <dd>
+          {% if unit.last_gps %}
+          <span class="mono">{{ "%.4f"|format(unit.last_gps.latitude) }}, {{ "%.4f"|format(unit.last_gps.longitude) }}</span>
+          <div class="muted small">{{ unit.last_gps.event_timestamp | local_dt }}</div>
+          {% else %}
+          <span class="muted">No breadcrumbs yet</span>
+          {% endif %}
+        </dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section class="panel">
+  <h2 class="panel-title">Assigned drivers</h2>
+  {% if unit.assignees %}
+  <table class="driver-table">
+    <thead>
+      <tr>
+        <th>Driver</th>
+        <th>Phone</th>
+        <th>Active</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in unit.assignees %}
+      <tr>
+        <td>
+          <a class="driver-link" href="/ui/drivers/{{ a.driver_id }}">{{ a.display_name or a.driver_id }}</a>
+          <div class="muted small mono">{{ a.driver_id }}</div>
+        </td>
+        <td>
+          {% if a.phone_e164 %}
+          <a href="tel:{{ a.phone_e164 }}">{{ a.phone_e164 }}</a>
+          {% else %}
+          <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if a.is_active %}
+          <span class="badge live">Active</span>
+          {% else %}
+          <span class="badge hist">Inactive</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No drivers currently point at this unit in the roster.</p>
+  {% endif %}
+</section>
+
+<section class="panel route-page-panel">
+  <h2 class="panel-title">Day route · {{ local_date.isoformat() }}</h2>
+  {% with full_page=true %}
+  {% include "partials/route_map_detail.html" %}
+  {% endwith %}
+</section>
+
+<div id="route-drawer" class="alert-drawer" aria-hidden="true">
+  <div class="alert-drawer-backdrop" onclick="window.RouteMap && window.RouteMap.close()"></div>
+  <aside class="alert-drawer-panel route-drawer-panel" role="dialog" aria-label="Unit day route map">
+    <div class="alert-drawer-toolbar">
+      <button type="button" class="btn-sm" data-drawer-expand
+              onclick="window.RouteMap && window.RouteMap.toggleFullscreen()">Expand</button>
+      <button type="button" class="btn-sm drawer-close"
+              onclick="window.RouteMap && window.RouteMap.close()">Close</button>
+    </div>
+    <div id="route-drawer-body">
+      <p class="muted" style="padding:1.5rem">Open Route map to see the GPS trail for this day.</p>
+    </div>
+  </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.body.addEventListener("htmx:afterSwap", (ev) => {
+    if (ev.target && ev.target.id === "route-drawer-body") {
+      window.RouteMap && window.RouteMap.mount(ev.target);
+    }
+  });
+  window.RouteMap && window.RouteMap.bindOpenButtons();
+  window.RouteMap && window.RouteMap.mount();
+</script>
+{% endblock %}

@@ -241,6 +241,66 @@ class IngestionRepository:
             deduped.append(crumb)
         return deduped
 
+    async def get_gps_breadcrumbs_for_device_day(
+        self,
+        tenant_id: str,
+        device_id: str,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> list[GpsBreadcrumbRecord]:
+        """Fetch GPS breadcrumbs for a device in ``[start_utc, end_utc)``."""
+        stmt = (
+            select(GpsBreadcrumbRecord)
+            .where(
+                GpsBreadcrumbRecord.tenant_id == tenant_id,
+                GpsBreadcrumbRecord.device_id == device_id,
+                GpsBreadcrumbRecord.event_timestamp >= start_utc,
+                GpsBreadcrumbRecord.event_timestamp < end_utc,
+            )
+            .order_by(GpsBreadcrumbRecord.event_timestamp.asc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_hos_logs_for_device_day(
+        self,
+        tenant_id: str,
+        device_id: str,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> list[CanonicalHOSLogRecord]:
+        """Fetch HOS logs attributed to a device in ``[start_utc, end_utc)``."""
+        stmt = (
+            select(CanonicalHOSLogRecord)
+            .where(
+                CanonicalHOSLogRecord.tenant_id == tenant_id,
+                CanonicalHOSLogRecord.device_id == device_id,
+                CanonicalHOSLogRecord.event_timestamp >= start_utc,
+                CanonicalHOSLogRecord.event_timestamp < end_utc,
+            )
+            .order_by(CanonicalHOSLogRecord.event_timestamp.asc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_latest_gps_for_device(
+        self,
+        tenant_id: str,
+        device_id: str,
+    ) -> GpsBreadcrumbRecord | None:
+        """Return the most recent GPS breadcrumb for a device, if any."""
+        stmt = (
+            select(GpsBreadcrumbRecord)
+            .where(
+                GpsBreadcrumbRecord.tenant_id == tenant_id,
+                GpsBreadcrumbRecord.device_id == device_id,
+            )
+            .order_by(GpsBreadcrumbRecord.event_timestamp.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     # ── Redis State Caching ──────────────────────────────────────────────
 
     @staticmethod

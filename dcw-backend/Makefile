@@ -27,7 +27,7 @@ help:
 	@echo "  make fetch-history  Fetch last DAYS (default 30) Geotab HOS → HISTORY_JSON"
 	@echo "  make fetch-gps-history  Fetch last GPS_DAYS (default 7) Geotab LogRecord → Postgres"
 	@echo "  make preview-roster Preview Geotab+Samsara driver/vehicle roster completeness"
-	@echo "  make sync-roster    Sync provider driver rosters into driver_roster (Postgres)"
+	@echo "  make sync-roster    Sync driver + vehicle rosters into Postgres"
 	@echo "  make seed-history Persist $(HISTORY_JSON) into Postgres"
 	@echo "  make seed-history-refresh  DEV: remap PC/YM, truncate tenant HOS, re-seed"
 	@echo "  make remap-pc-ym  Remap PC/YM in $(HISTORY_JSON) (no Geotab)"
@@ -115,7 +115,7 @@ HOURS ?= 48
 preview-roster:
 	$(PYTHON) scripts/preview_driver_roster.py --hours $(HOURS)
 
-# Upsert Geotab + Samsara driver_roster rows (product path; also runs on worker cron).
+# Upsert Geotab + Samsara driver_roster + vehicle_roster (also runs on worker cron).
 sync-roster:
 	$(PYTHON) scripts/sync_driver_roster.py
 

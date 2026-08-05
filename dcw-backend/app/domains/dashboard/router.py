@@ -7,6 +7,7 @@ Provides REST endpoints for:
   - GET /api/drivers/positions — latest lat/lon per driver (+ 30d W/V)
   - GET /api/drivers/{id}/day  — home-terminal day grid + alert markers
   - GET /api/drivers/{id}/day/route — GPS trail + status-colored segments
+  - GET /api/units/{device_id}/day/route — unit-day GPS trail + status segments
   - GET /api/alerts            — fleet alerts (backtest + live) with filters
   - GET /api/alerts/dispatch-log — Twilio / dry-run JSONL history
   - GET /api/ops/log           — dcw.* ops JSONL event history
@@ -974,6 +975,79 @@ async def get_driver_day(
     return await _build_driver_day(
         session, driver_id, local_date, active.fleet_id, display_tz=display_tz
     )
+
+
+@router.get("/units/{device_id}/day/route", response_model=DriverDayRouteResponse)
+async def get_unit_day_route(
+    request: Request,
+    device_id: str,
+    date_str: str | None = Query(
+        default=None,
+        alias="date",
+        description="Local calendar date YYYY-MM-DD (display TZ)",
+    ),
+    tz: str | None = Query(
+        default=None,
+        description="Display IANA timezone (default America/Chicago)",
+    ),
+    fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
+    session: AsyncSession = Depends(get_session),
+) -> DriverDayRouteResponse:
+    """Return status-colored GPS route segments for one unit / local day."""
+    active = await resolve_fleet(request, fleet_param=fleet)
+    tenant_id = active.fleet_id
+    display_tz = tz if tz else default_display_timezone()
+    if date_str:
+        try:
+            local_date = date.fromisoformat(date_str)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="date must be YYYY-MM-DD",
+            ) from exc
+    else:
+        local_date = datetime.now(zoneinfo_for(display_tz)).date()
+
+    bounds = chicago_day_bounds(local_date, zoneinfo_for(display_tz))
+    repo = IngestionRepository(session)
+    crumbs = await repo.get_gps_breadcrumbs_for_device_day(
+        tenant_id=tenant_id,
+        device_id=device_id,
+        start_utc=bounds.start_utc,
+        end_utc=bounds.end_utc,
+    )
+    hos_logs = await repo.get_hos_logs_for_device_day(
+        tenant_id=tenant_id,
+        device_id=device_id,
+        start_utc=bounds.start_utc,
+        end_utc=bounds.end_utc,
+    )
+    breadcrumb_dicts = [
+        {
+            "event_timestamp": c.event_timestamp,
+            "latitude": c.latitude,
+            "longitude": c.longitude,
+        }
+        for c in crumbs
+    ]
+    hos_events = [
+        {
+            "event_timestamp": log.event_timestamp,
+            "status": log.status,
+            "latitude": log.latitude,
+            "longitude": log.longitude,
+        }
+        for log in hos_logs
+    ]
+    payload = build_day_route_payload(
+        driver_id="",
+        device_id=device_id,
+        local_date=local_date,
+        breadcrumbs=breadcrumb_dicts,
+        hos_events=hos_events,
+        alert_markers=[],
+    )
+    return DriverDayRouteResponse.model_validate(payload)
 
 
 @router.get("/drivers/{driver_id}/day/route", response_model=DriverDayRouteResponse)

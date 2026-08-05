@@ -247,6 +247,45 @@ async def test_get_gps_breadcrumbs_for_driver_day_route_no_hos_devices() -> None
 
 
 @pytest.mark.asyncio
+async def test_get_gps_breadcrumbs_for_device_day() -> None:
+    session = MagicMock()
+    gps_result = MagicMock()
+    ts = datetime(2026, 7, 30, 14, 0, tzinfo=UTC)
+    gps_result.scalars.return_value.all.return_value = [
+        _mock_crumb("r1", "b382", "b1", ts),
+        _mock_crumb("r2", "unassigned:device:b1", "b1", ts),
+    ]
+    session.execute = AsyncMock(return_value=gps_result)
+
+    repo = IngestionRepository(session)
+    start = datetime(2026, 7, 30, 5, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 31, 5, 0, tzinfo=UTC)
+    result = await repo.get_gps_breadcrumbs_for_device_day(
+        tenant_id="bbbBros",
+        device_id="b1",
+        start_utc=start,
+        end_utc=end,
+    )
+    assert len(result) == 2
+    assert [c.device_id for c in result] == ["b1", "b1"]
+    session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_latest_gps_for_device() -> None:
+    session = MagicMock()
+    gps_result = MagicMock()
+    crumb = _mock_crumb("r9", "b382", "b1", datetime(2026, 7, 30, 18, 0, tzinfo=UTC))
+    gps_result.scalar_one_or_none.return_value = crumb
+    session.execute = AsyncMock(return_value=gps_result)
+
+    repo = IngestionRepository(session)
+    result = await repo.get_latest_gps_for_device(tenant_id="bbbBros", device_id="b1")
+    assert result is crumb
+    assert result.device_id == "b1"
+
+
+@pytest.mark.asyncio
 async def test_persist_gps_breadcrumbs_dedup_on_conflict() -> None:
     """Second insert for same (tenant_id, raw_id) should not raise; rowcount 0."""
     session = MagicMock()

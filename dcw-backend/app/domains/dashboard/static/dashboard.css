@@ -173,6 +173,41 @@ a:hover { text-decoration: underline; }
 }
 .badge.live { background: #1a3d2e; color: var(--ok); }
 .badge.hist { background: #2a3140; color: var(--muted); }
+.badge.ok { background: #1a3d2e; color: var(--ok); }
+.badge.warn { background: #3d2e1a; color: var(--warn); }
+
+.profile-panel { margin-bottom: 1rem; }
+.profile-panel-compact { padding-top: 0.85rem; padding-bottom: 0.85rem; }
+.profile-fields-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+.profile-badges { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.profile-dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 0.75rem 1.25rem;
+  margin: 0;
+}
+.profile-dl dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+.profile-dl dd { margin: 0; font-size: 0.9rem; }
+.profile-dl .mono,
+.mono { font-family: var(--mono); font-size: 0.85rem; }
+.panel-title {
+  margin: 0 0 0.85rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
 
 .status-chip {
   font-family: var(--mono);

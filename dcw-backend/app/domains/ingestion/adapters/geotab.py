@@ -544,8 +544,10 @@ class GeotabAdapter(BaseTelematicsAdapter):
                 devices.append(plain)
         return devices
 
-    def _fetch_assignment_signal_sync(self, hours: int) -> dict[str, str]:
-        """Return driver_id → most recent device_id from recent DutyStatusLog."""
+    def _fetch_assignment_signal_sync(
+        self, hours: int
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Return (driver→device, device→driver) from recent DutyStatusLog."""
         assert self.api is not None
         from_date = datetime.now(UTC) - timedelta(hours=hours)
         from_date_iso = from_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -553,7 +555,7 @@ class GeotabAdapter(BaseTelematicsAdapter):
             raw_logs = self.api.get("DutyStatusLog", search={"fromDate": from_date_iso})
         except Exception as exc:
             logger.warning("Geotab DutyStatusLog assignment signal failed: %s", exc)
-            return {}
+            return {}, {}
 
         serialized: list[dict[str, Any]] = []
         for raw in raw_logs:
@@ -561,22 +563,38 @@ class GeotabAdapter(BaseTelematicsAdapter):
             if plain is not None:
                 serialized.append(plain)
         serialized.sort(key=lambda r: str(r.get("dateTime") or r.get("date") or ""))
-        driver_to_device, _ = geotab_assignment_from_duty_logs(serialized)
-        return driver_to_device
+        return geotab_assignment_from_duty_logs(serialized)
 
     async def fetch_vehicle_roster(self, tenant_id: str) -> list[VehicleRosterEntry]:
-        """Fetch Geotab Device rows as canonical vehicle roster DTOs."""
+        """Fetch Geotab Device rows as canonical vehicle roster DTOs.
+
+        ``current_driver_id`` comes from the recent DutyStatusLog inverse map
+        (device → last real driver), same lookback as driver roster.
+        """
         if self.api is None:
             await self.connect()
             assert self.api is not None
 
+        hours = settings.ROSTER_ASSIGNMENT_LOOKBACK_HOURS
         devices = await asyncio.to_thread(self._fetch_devices_sync)
+        _, device_to_driver = await asyncio.to_thread(self._fetch_assignment_signal_sync, hours)
+
         entries: list[VehicleRosterEntry] = []
         for device in devices:
-            entry = map_geotab_device_to_roster_entry(device, tenant_id=tenant_id)
+            device_id = nonempty_str(device.get("id"))
+            entry = map_geotab_device_to_roster_entry(
+                device,
+                tenant_id=tenant_id,
+                current_driver_id=device_to_driver.get(device_id) if device_id else None,
+            )
             if entry is not None:
                 entries.append(entry)
-        logger.info("Geotab vehicle roster: %d devices (tenant=%s)", len(entries), tenant_id)
+        logger.info(
+            "Geotab vehicle roster: %d devices (%d with driver) tenant=%s",
+            len(entries),
+            sum(1 for e in entries if e.current_driver_id),
+            tenant_id,
+        )
         return entries
 
     async def fetch_driver_roster(self, tenant_id: str) -> list[DriverRosterEntry]:
@@ -592,7 +610,7 @@ class GeotabAdapter(BaseTelematicsAdapter):
         # Sequential: mygeotab API session is not safe for concurrent calls.
         users = await asyncio.to_thread(self._fetch_users_sync)
         devices = await asyncio.to_thread(self._fetch_devices_sync)
-        driver_to_device = await asyncio.to_thread(self._fetch_assignment_signal_sync, hours)
+        driver_to_device, _ = await asyncio.to_thread(self._fetch_assignment_signal_sync, hours)
         device_labels = {
             str(d["id"]): nonempty_str(d.get("name"))
             for d in devices

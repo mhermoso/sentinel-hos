@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -41,6 +41,8 @@ from app.domains.dashboard.ops_feed import (
     rows_from_ingestion,
     rows_from_ops,
 )
+from app.domains.dashboard.day_builder import chicago_day_bounds
+from app.domains.dashboard.profile import build_contact_profile
 from app.domains.dashboard.route_builder import build_day_route_payload
 from app.domains.dashboard.router import (
     _build_driver_day,
@@ -50,7 +52,11 @@ from app.domains.dashboard.router import (
     list_audit_records,
     list_fleet_alerts,
 )
-from app.domains.dashboard.schemas import AlertDetailResponse, DriverDayRouteResponse
+from app.domains.dashboard.schemas import (
+    AlertDetailResponse,
+    DriverContactProfile,
+    DriverDayRouteResponse,
+)
 from app.domains.dashboard.timezone import (
     DISPLAY_TIMEZONES,
     format_display_clock,
@@ -61,10 +67,12 @@ from app.domains.dashboard.timezone import (
     tz_abbreviation,
     zoneinfo_for,
 )
+from app.domains.dashboard.units import get_unit_detail, list_units_for_tenant
 from app.domains.engine.repository import EngineRepository
 from app.domains.ingestion.fleets import list_enabled_fleets
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.repository import IngestionRepository
+from app.domains.ingestion.roster_repository import RosterRepository
 
 logger = logging.getLogger("dcw.dashboard.ui")
 
@@ -483,6 +491,43 @@ async def ui_drivers_partial(
     )
 
 
+async def _contact_profile_for_driver(
+    session: AsyncSession,
+    tenant_id: str,
+    driver_id: str,
+) -> DriverContactProfile:
+    roster_by_id = await RosterRepository(session).map_by_external_id(tenant_id)
+    return build_contact_profile(driver_id, roster_by_id.get(driver_id))
+
+
+@ui_router.get("/ui/drivers/{driver_id}/profile", response_class=HTMLResponse)
+async def ui_driver_profile(
+    request: Request,
+    driver_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """Dedicated contact/assignment profile page (roster fields only)."""
+    base_ctx = await _base_context(request)
+    tenant_id = base_ctx["active_fleet"].fleet_id
+    profile = await _contact_profile_for_driver(session, tenant_id, driver_id)
+    health = await _health_context(session)
+    display_name = profile.display_name or resolve_driver_name(driver_id, None)
+    return templates.TemplateResponse(
+        request,
+        "driver_profile.html",
+        {
+            "profile": profile,
+            "driver_id": driver_id,
+            "driver_name": display_name,
+            "health": health,
+            "alert_dry_run": settings.ALERT_DRY_RUN,
+            "rule_pack_version": settings.DEFAULT_RULE_PACK_VERSION,
+            "current_path": str(request.url.path),
+            **base_ctx,
+        },
+    )
+
+
 @ui_router.get("/ui/drivers/{driver_id}", response_class=HTMLResponse)
 async def ui_driver_day(
     request: Request,
@@ -500,6 +545,7 @@ async def ui_driver_day(
     day_clocks = await _build_day_clocks_for_driver(
         session, driver_id, local_date, display_tz, tenant_id
     )
+    profile = await _contact_profile_for_driver(session, tenant_id, driver_id)
     health = await _health_context(session)
     prev_date = (local_date - timedelta(days=1)).isoformat()
     next_date = (local_date + timedelta(days=1)).isoformat()
@@ -513,6 +559,7 @@ async def ui_driver_day(
         {
             "day": day,
             "day_clocks": day_clocks,
+            "profile": profile,
             "health": health,
             "prev_date": prev_date,
             "next_date": next_date,
@@ -986,6 +1033,184 @@ async def _build_logs_context(
         "health": health,
         "row_count": len(rows),
     }
+
+
+async def _build_unit_route_context(
+    session: AsyncSession,
+    device_id: str,
+    local_date: date,
+    display_tz: str,
+    tenant_id: str,
+) -> dict[str, Any]:
+    """Build device-day GPS route payload (HOS colored by device logs)."""
+    bounds = chicago_day_bounds(local_date, zoneinfo_for(display_tz))
+    repo = IngestionRepository(session)
+    crumbs = await repo.get_gps_breadcrumbs_for_device_day(
+        tenant_id=tenant_id,
+        device_id=device_id,
+        start_utc=bounds.start_utc,
+        end_utc=bounds.end_utc,
+    )
+    hos_logs = await repo.get_hos_logs_for_device_day(
+        tenant_id=tenant_id,
+        device_id=device_id,
+        start_utc=bounds.start_utc,
+        end_utc=bounds.end_utc,
+    )
+    breadcrumb_dicts = [
+        {
+            "event_timestamp": c.event_timestamp,
+            "latitude": c.latitude,
+            "longitude": c.longitude,
+        }
+        for c in crumbs
+    ]
+    hos_events = [
+        {
+            "event_timestamp": log.event_timestamp,
+            "status": log.status,
+            "latitude": log.latitude,
+            "longitude": log.longitude,
+        }
+        for log in hos_logs
+    ]
+    payload = build_day_route_payload(
+        driver_id="",
+        device_id=device_id,
+        local_date=local_date,
+        breadcrumbs=breadcrumb_dicts,
+        hos_events=hos_events,
+        alert_markers=[],
+        carry_forward_status=None,
+    )
+    route = DriverDayRouteResponse.model_validate(payload)
+    return {
+        "route": route,
+        "route_json": route.model_dump(mode="json"),
+        "device_id": device_id,
+        "local_date": local_date,
+    }
+
+
+@ui_router.get("/ui/units", response_class=HTMLResponse)
+async def ui_units(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """Fleet units list (vehicle_roster + assignees / status / last GPS)."""
+    base_ctx = await _base_context(request)
+    tenant_id = base_ctx["active_fleet"].fleet_id
+    units = await list_units_for_tenant(session, tenant_id)
+    health = await _health_context(session)
+    return templates.TemplateResponse(
+        request,
+        "units.html",
+        {
+            "units": units,
+            "health": health,
+            "alert_dry_run": settings.ALERT_DRY_RUN,
+            "rule_pack_version": settings.DEFAULT_RULE_PACK_VERSION,
+            "current_path": str(request.url.path),
+            **base_ctx,
+        },
+    )
+
+
+@ui_router.get("/ui/units/{device_id}", response_class=HTMLResponse)
+async def ui_unit_detail(
+    request: Request,
+    device_id: str,
+    date_str: str | None = Query(default=None, alias="date"),
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """Unit detail: assignees, last driver/status, last GPS, day route map."""
+    base_ctx = await _base_context(request)
+    display_tz = base_ctx["timezone"]
+    tenant_id = base_ctx["active_fleet"].fleet_id
+    unit = await get_unit_detail(session, tenant_id, device_id)
+    if unit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unit {device_id} not found in vehicle roster",
+        )
+    local_date = _parse_date(date_str, display_tz)
+    prev_date = (local_date - timedelta(days=1)).isoformat()
+    next_date = (local_date + timedelta(days=1)).isoformat()
+    route_ctx = await _build_unit_route_context(
+        session, device_id, local_date, display_tz, tenant_id
+    )
+    health = await _health_context(session)
+    return templates.TemplateResponse(
+        request,
+        "unit_detail.html",
+        {
+            "unit": unit,
+            "local_date": local_date,
+            "prev_date": prev_date,
+            "next_date": next_date,
+            "today": _today_local(display_tz).isoformat(),
+            "health": health,
+            "alert_dry_run": settings.ALERT_DRY_RUN,
+            "rule_pack_version": settings.DEFAULT_RULE_PACK_VERSION,
+            "current_path": str(request.url.path)
+            + (f"?date={local_date.isoformat()}" if date_str else ""),
+            **route_ctx,
+            **base_ctx,
+        },
+    )
+
+
+@ui_router.get("/ui/units/{device_id}/route/detail", response_class=HTMLResponse)
+async def ui_unit_route_map_detail(
+    request: Request,
+    device_id: str,
+    date_str: str | None = Query(default=None, alias="date"),
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """HTMX fragment: unit day route map drawer body."""
+    base_ctx = await _base_context(request)
+    display_tz = base_ctx["timezone"]
+    tenant_id = base_ctx["active_fleet"].fleet_id
+    local_date = _parse_date(date_str, display_tz)
+    ctx = await _build_unit_route_context(
+        session, device_id, local_date, display_tz, tenant_id
+    )
+    return templates.TemplateResponse(
+        request,
+        "partials/route_map_detail.html",
+        {**ctx, **base_ctx, "full_page": False},
+    )
+
+
+@ui_router.get("/ui/units/{device_id}/route", response_class=HTMLResponse)
+async def ui_unit_route_map_page(
+    request: Request,
+    device_id: str,
+    date_str: str | None = Query(default=None, alias="date"),
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """Full-page unit day route map."""
+    base_ctx = await _base_context(request)
+    display_tz = base_ctx["timezone"]
+    tenant_id = base_ctx["active_fleet"].fleet_id
+    local_date = _parse_date(date_str, display_tz)
+    ctx = await _build_unit_route_context(
+        session, device_id, local_date, display_tz, tenant_id
+    )
+    health = await _health_context(session)
+    return templates.TemplateResponse(
+        request,
+        "route_map_page.html",
+        {
+            **ctx,
+            **base_ctx,
+            "full_page": True,
+            "health": health,
+            "alert_dry_run": settings.ALERT_DRY_RUN,
+            "rule_pack_version": settings.DEFAULT_RULE_PACK_VERSION,
+            "current_path": str(request.url.path),
+        },
+    )
 
 
 @ui_router.get("/ui/logs", response_class=HTMLResponse)

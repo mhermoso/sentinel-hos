@@ -116,6 +116,7 @@ def map_samsara_vehicle_to_roster_entry(
     vehicle: dict[str, Any],
     *,
     tenant_id: str,
+    current_driver_id: str | None = None,
 ) -> VehicleRosterEntry | None:
     """Map a Samsara vehicle dict to ``VehicleRosterEntry``."""
     vehicle_id = nonempty_str(vehicle.get("id"))
@@ -127,7 +128,7 @@ def map_samsara_vehicle_to_roster_entry(
         external_device_id=vehicle_id,
         name=nonempty_str(vehicle.get("name")),
         vin=nonempty_str(vehicle.get("vin")),
-        current_driver_id=None,
+        current_driver_id=nonempty_str(current_driver_id),
     )
 
 
@@ -675,18 +676,45 @@ class SamsaraAdapter(BaseTelematicsAdapter):
         return driver_to_vehicle
 
     async def fetch_vehicle_roster(self, tenant_id: str) -> list[VehicleRosterEntry]:
-        """Fetch Samsara vehicles as canonical vehicle roster DTOs."""
+        """Fetch Samsara vehicles as canonical vehicle roster DTOs.
+
+        ``current_driver_id`` is filled from the inverse of driver static/current
+        vehicle assignments (and recent HOS vehicle map as a fallback).
+        """
         if self.client is None:
             await self.connect()
             assert self.client is not None
 
+        hours = settings.ROSTER_ASSIGNMENT_LOOKBACK_HOURS
         raw_vehicles = await self._list_all_vehicles()
+        raw_drivers = await self._list_all_drivers()
+        hos_vehicle_map = await self._recent_hos_vehicle_map(hours)
+
+        vehicle_to_driver: dict[str, str] = {}
+        for plain in raw_drivers:
+            uid = nonempty_str(plain.get("id"))
+            if not uid:
+                continue
+            vehicle_id = samsara_vehicle_assignment_from_driver(plain) or hos_vehicle_map.get(uid)
+            if vehicle_id:
+                vehicle_to_driver[vehicle_id] = uid
+
         entries: list[VehicleRosterEntry] = []
         for vehicle in raw_vehicles:
-            entry = map_samsara_vehicle_to_roster_entry(vehicle, tenant_id=tenant_id)
+            vehicle_id = nonempty_str(vehicle.get("id"))
+            entry = map_samsara_vehicle_to_roster_entry(
+                vehicle,
+                tenant_id=tenant_id,
+                current_driver_id=vehicle_to_driver.get(vehicle_id) if vehicle_id else None,
+            )
             if entry is not None:
                 entries.append(entry)
-        logger.info("Samsara vehicle roster: %d vehicles (tenant=%s)", len(entries), tenant_id)
+        logger.info(
+            "Samsara vehicle roster: %d vehicles (%d with driver) tenant=%s",
+            len(entries),
+            sum(1 for e in entries if e.current_driver_id),
+            tenant_id,
+        )
         return entries
 
     async def fetch_driver_roster(self, tenant_id: str) -> list[DriverRosterEntry]:

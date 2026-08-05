@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Units — Sentinel HOS{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <h1>Units</h1>
+  <p class="lede">Fleet vehicles from the roster cache. Open a unit for assignees, status, and day route.</p>
+</section>
+
+<section class="panel">
+  <div class="panel-meta">
+    <span>{{ units|length }} units</span>
+    <span>Display TZ: {{ timezone }}{% if tz_abbrev %} ({{ tz_abbrev }}){% endif %}</span>
+    <span class="hint">Populate via <code>make sync-roster</code></span>
+  </div>
+
+  <table class="driver-table"
+         data-sortable
+         data-sort-storage="dcw.units.sort"
+         data-default-sort="unit"
+         data-default-dir="asc">
+    <thead>
+      <tr>
+        <th data-sort-key="unit" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Unit">Unit</button>
+        </th>
+        <th data-sort-key="driver" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Current / last driver">Current / last driver</button>
+        </th>
+        <th data-sort-key="status" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Status">Status</button>
+        </th>
+        <th data-sort-key="assignees" data-sort-as="number" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Assignees">Assignees</button>
+        </th>
+        <th data-sort-key="gps" data-sort-as="text" aria-sort="none">
+          <button type="button" class="sort-btn" data-label="Last GPS">Last GPS</button>
+        </th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if not units %}
+      <tr>
+        <td colspan="5" class="empty">
+          No units in <code>vehicle_roster</code> yet.
+          Run <code>make sync-roster</code> to pull Geotab/Samsara vehicles.
+        </td>
+      </tr>
+      {% endif %}
+      {% for u in units %}
+      <tr>
+        <td data-sort-value="{{ u.name or u.device_id }}">
+          <a class="driver-link" href="/ui/units/{{ u.device_id }}">{{ u.name or u.device_id }}</a>
+          {% if u.name %}
+          <div class="muted small mono">{{ u.device_id }}</div>
+          {% endif %}
+          {% if u.vin %}
+          <div class="muted small">VIN {{ u.vin }}</div>
+          {% endif %}
+        </td>
+        <td data-sort-value="{{ u.current_driver_name or u.current_driver_id or '' }}">
+          {% if u.current_driver_id %}
+          <a class="driver-link" href="/ui/drivers/{{ u.current_driver_id }}">
+            {{ u.current_driver_name or u.current_driver_id }}
+          </a>
+          {% else %}
+          <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td data-sort-value="{{ u.current_status or '' }}">
+          {% if u.current_status %}
+          <span class="status-chip status-{{ u.current_status }}">{{ u.current_status }}</span>
+          {% else %}
+          <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td data-sort-value="{{ u.assignee_count }}">{{ u.assignee_count }}</td>
+        <td data-sort-value="{{ u.last_gps_at.isoformat() if u.last_gps_at else '' }}">
+          {% if u.last_gps_at %}
+          <span title="{{ u.last_gps_lat }}, {{ u.last_gps_lon }}">
+            {{ u.last_gps_at | local_dt }}
+          </span>
+          <div class="muted small mono">{{ "%.4f"|format(u.last_gps_lat) }}, {{ "%.4f"|format(u.last_gps_lon) }}</div>
+          {% else %}
+          <span class="muted">—</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.SortableTables && window.SortableTables.bind();
+</script>
+{% endblock %}

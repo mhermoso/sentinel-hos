@@ -195,19 +195,13 @@
     });
   }
 
-  function loadForDriverDay(driverId, dateStr) {
-    if (!driverId) return;
+  function loadRouteDetail(url) {
     open();
     const body = document.getElementById("route-drawer-body");
     if (body) {
       body.innerHTML =
         '<p class="muted" style="padding:1.5rem">Loading route map…</p>';
     }
-    const params = new URLSearchParams();
-    if (dateStr) params.set("date", dateStr);
-    const url =
-      `/ui/drivers/${encodeURIComponent(driverId)}/route/detail` +
-      (params.toString() ? `?${params}` : "");
 
     if (window.htmx) {
       htmx.ajax("GET", url, { target: "#route-drawer-body", swap: "innerHTML" });
@@ -235,6 +229,26 @@
       });
   }
 
+  function loadForDriverDay(driverId, dateStr) {
+    if (!driverId) return;
+    const params = new URLSearchParams();
+    if (dateStr) params.set("date", dateStr);
+    const url =
+      `/ui/drivers/${encodeURIComponent(driverId)}/route/detail` +
+      (params.toString() ? `?${params}` : "");
+    loadRouteDetail(url);
+  }
+
+  function loadForDeviceDay(deviceId, dateStr) {
+    if (!deviceId) return;
+    const params = new URLSearchParams();
+    if (dateStr) params.set("date", dateStr);
+    const url =
+      `/ui/units/${encodeURIComponent(deviceId)}/route/detail` +
+      (params.toString() ? `?${params}` : "");
+    loadRouteDetail(url);
+  }
+
   function bindOpenButtons(root) {
     const scope = root || document;
     scope.querySelectorAll("[data-route-open]").forEach((btn) => {
@@ -242,8 +256,13 @@
       btn.dataset.routeBound = "1";
       btn.addEventListener("click", (ev) => {
         ev.preventDefault();
+        const deviceId = btn.getAttribute("data-device-id");
         const driverId = btn.getAttribute("data-driver-id");
         const dateStr = btn.getAttribute("data-date") || "";
+        if (deviceId) {
+          loadForDeviceDay(deviceId, dateStr);
+          return;
+        }
         loadForDriverDay(driverId, dateStr);
       });
     });
@@ -257,6 +276,7 @@
     exitFullscreen,
     handleEscape,
     loadForDriverDay,
+    loadForDeviceDay,
     bindOpenButtons,
   };
 

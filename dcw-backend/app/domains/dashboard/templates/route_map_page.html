@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Route · {{ route.meta.driver_id }} · {{ route.meta.date }} — Sentinel HOS{% endblock %}
+{% block title %}Route · {{ route.meta.device_id or route.meta.driver_id }} · {{ route.meta.date }} — Sentinel HOS{% endblock %}
 
 {% block head %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -14,11 +14,15 @@
 <section class="page-head alert-page-head">
   <div>
     <p class="muted small">
+      {% if route.meta.device_id %}
+      <a href="/ui/units/{{ route.meta.device_id }}?date={{ route.meta.date }}">← Unit day {{ route.meta.date }}</a>
+      {% else %}
       <a href="/ui/drivers/{{ route.meta.driver_id }}?date={{ route.meta.date }}">← Day {{ route.meta.date }}</a>
+      {% endif %}
     </p>
     <h1>Route map</h1>
     <p class="lede">
-      {{ route.meta.driver_id }}
+      {{ route.meta.device_id or route.meta.driver_id }}
       · {{ route.meta.point_count }} GPS points
       · {{ route.meta.segment_count }} segments
     </p>
