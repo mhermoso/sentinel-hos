@@ -107,8 +107,15 @@ class ComplianceResult(BaseModel):
 
     @property
     def is_compliant(self) -> bool:
-        """True when no active violations are present."""
-        return len(self.violations) == 0
+        """True when no limit-exceeding entries are present.
+
+        WARNING entries (approaching a limit) stay on ``violations`` for
+        proactive alerting but do not make the driver non-compliant.
+        """
+        return not any(
+            v.severity in (ViolationSeverity.VIOLATION, ViolationSeverity.CRITICAL)
+            for v in self.violations
+        )
 
     @property
     def highest_severity(self) -> Optional[ViolationSeverity]:
