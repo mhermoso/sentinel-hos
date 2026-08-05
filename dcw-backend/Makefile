@@ -1,7 +1,7 @@
 .PHONY: help dev worker test lint format clean db-up db-down \
         stack-up stack-down stack-logs image-build kube-up kube-down ui \
         seed-history seed-history-refresh backtest-dispatches remap-pc-ym \
-        fetch-history fetch-gps-history
+        fetch-history fetch-gps-history preview-roster sync-roster
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
 ARQ ?= $(shell if [ -x .venv/bin/arq ]; then echo .venv/bin/arq; else echo arq; fi)
@@ -26,6 +26,8 @@ help:
 	@echo "  make db-down      Stop local infrastructure containers"
 	@echo "  make fetch-history  Fetch last DAYS (default 30) Geotab HOS → HISTORY_JSON"
 	@echo "  make fetch-gps-history  Fetch last GPS_DAYS (default 7) Geotab LogRecord → Postgres"
+	@echo "  make preview-roster Preview Geotab+Samsara driver/vehicle roster completeness"
+	@echo "  make sync-roster    Sync provider driver rosters into driver_roster (Postgres)"
 	@echo "  make seed-history Persist $(HISTORY_JSON) into Postgres"
 	@echo "  make seed-history-refresh  DEV: remap PC/YM, truncate tenant HOS, re-seed"
 	@echo "  make remap-pc-ym  Remap PC/YM in $(HISTORY_JSON) (no Geotab)"
@@ -107,6 +109,15 @@ kube-down:
 
 fetch-history:
 	$(PYTHON) scripts/fetch_hos_history.py --days $(DAYS) --output $(HISTORY_JSON)
+
+# Driver/vehicle roster completeness preview (Phase 1). Override: make preview-roster HOURS=72
+HOURS ?= 48
+preview-roster:
+	$(PYTHON) scripts/preview_driver_roster.py --hours $(HOURS)
+
+# Upsert Geotab + Samsara driver_roster rows (product path; also runs on worker cron).
+sync-roster:
+	$(PYTHON) scripts/sync_driver_roster.py
 
 # GPS breadcrumb backfill (ADR-007). Override: make fetch-gps-history GPS_DAYS=14
 GPS_DAYS ?= 30

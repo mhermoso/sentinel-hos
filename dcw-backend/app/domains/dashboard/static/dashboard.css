@@ -1023,6 +1023,18 @@ a:hover { text-decoration: underline; }
 .drivers-filters input[type="search"] {
   min-width: 12rem;
 }
+.drivers-filters-check {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.4rem !important;
+  min-height: 2rem;
+  padding-bottom: 0.15rem;
+}
+.drivers-filters-check input[type="checkbox"] {
+  min-width: auto;
+  width: 1rem;
+  height: 1rem;
+}
 .alerts-table {
   width: 100%;
   border-collapse: collapse;

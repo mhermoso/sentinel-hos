@@ -47,6 +47,7 @@ from app.domains.ingestion.history_backfill import (
 )
 from app.domains.ingestion.normalizer import normalize_batch
 from app.domains.ingestion.repository import IngestionRepository
+from app.domains.ingestion.roster_sync import sync_driver_rosters
 from app.domains.ingestion.schemas import DCWGpsBreadcrumb
 
 logger = logging.getLogger("dcw.ingestion.poller")
@@ -471,6 +472,7 @@ class WorkerSettings:
         poll_samsara_feed,
         poll_samsara_gps,
         sweep_active_drivers,
+        sync_driver_rosters,
     ]
     cron_jobs = [
         cron(
@@ -496,6 +498,12 @@ class WorkerSettings:
         cron(
             poll_samsara_gps,
             second={50},  # Staggered after Samsara HOS (:45); away from Geotab GPS (:15)
+            run_at_startup=True,
+        ),
+        cron(
+            sync_driver_rosters,
+            minute={0, 15, 30, 45},
+            second={5},
             run_at_startup=True,
         ),
     ]

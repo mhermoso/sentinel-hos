@@ -294,19 +294,45 @@ def _drivers_query_context(
     q: str | None,
     status: str | None,
     mode: str | None,
+    assignment: str | None,
+    profile: str | None,
+    on_unit: bool | None,
 ) -> dict[str, Any]:
-    """Normalize driver list filters for templates and filter_drivers."""
+    """Normalize driver list filters for templates and filter_drivers.
+
+    Defaults: assignment=assigned, profile=complete (Assigned people with
+    usable contact). Explicit ``all`` clears a gate via normalize_filter_str.
+    """
     q_n = normalize_filter_str(q)
     status_n = normalize_filter_str(status)
     mode_n = normalize_filter_str(mode)
-    filtered = any(x is not None for x in (q_n, status_n, mode_n))
+
+    # Defaults when query params are omitted (first page load).
+    assignment_raw = "assigned" if assignment is None else assignment
+    profile_raw = "complete" if profile is None else profile
+    assignment_n = normalize_filter_str(assignment_raw)
+    profile_n = normalize_filter_str(profile_raw)
+    on_unit_flag = True if on_unit is True else None
+
+    # Treat non-default assignment/profile as "filtered" for count label.
+    default_assignment = assignment_n == "assigned"
+    default_profile = profile_n == "complete"
+    filtered = any(
+        x is not None for x in (q_n, status_n, mode_n)
+    ) or not default_assignment or not default_profile or on_unit_flag is True
     return {
         "q": q_n or "",
         "status": status_n or "",
         "mode": mode_n or "",
+        "assignment": assignment_n or "all",
+        "profile": profile_n or "all",
+        "on_unit": bool(on_unit_flag),
         "q_filter": q_n,
         "status_filter": status_n,
         "mode_filter": mode_n,
+        "assignment_filter": assignment_n,
+        "profile_filter": profile_n,
+        "on_unit_filter": on_unit_flag,
         "filtered": filtered,
     }
 
@@ -317,17 +343,30 @@ async def _drivers_page_context(
     q: str | None,
     status: str | None,
     mode: str | None,
+    assignment: str | None,
+    profile: str | None,
+    on_unit: bool | None,
     display_tz: str,
     tenant_id: str,
 ) -> dict[str, Any]:
     """Shared drivers list filter context."""
-    filt = _drivers_query_context(q=q, status=status, mode=mode)
+    filt = _drivers_query_context(
+        q=q,
+        status=status,
+        mode=mode,
+        assignment=assignment,
+        profile=profile,
+        on_unit=on_unit,
+    )
     all_drivers = await _list_all_drivers(session, tenant_id)
     drivers = filter_drivers(
         all_drivers,
         q=filt["q_filter"],
         status=filt["status_filter"],
         mode=filt["mode_filter"],
+        assignment=filt["assignment_filter"],
+        profile=filt["profile_filter"],
+        on_unit=filt["on_unit_filter"],
     )
     today = _today_local(display_tz).isoformat()
     return {
@@ -381,6 +420,9 @@ async def ui_drivers(
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
     mode: str | None = Query(default=None),
+    assignment: str | None = Query(default=None),
+    profile: str | None = Query(default=None),
+    on_unit: bool | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     base_ctx = await _base_context(request)
@@ -389,6 +431,9 @@ async def ui_drivers(
         q=q,
         status=status,
         mode=mode,
+        assignment=assignment,
+        profile=profile,
+        on_unit=on_unit,
         display_tz=base_ctx["timezone"],
         tenant_id=base_ctx["active_fleet"].fleet_id,
     )
@@ -413,6 +458,9 @@ async def ui_drivers_partial(
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
     mode: str | None = Query(default=None),
+    assignment: str | None = Query(default=None),
+    profile: str | None = Query(default=None),
+    on_unit: bool | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     """HTMX fragment: refreshable driver list rows."""
@@ -422,6 +470,9 @@ async def ui_drivers_partial(
         q=q,
         status=status,
         mode=mode,
+        assignment=assignment,
+        profile=profile,
+        on_unit=on_unit,
         display_tz=base_ctx["timezone"],
         tenant_id=base_ctx["active_fleet"].fleet_id,
     )

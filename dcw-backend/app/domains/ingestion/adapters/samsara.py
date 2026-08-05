@@ -48,10 +48,19 @@ from app.domains.ingestion.normalizer import (
     normalize_timestamp,
     sanitize_raw_payload,
 )
+from app.domains.ingestion.roster import (
+    derive_has_unit_assignment,
+    derive_profile_complete,
+    nonempty_str,
+    normalize_phone_e164,
+    split_display_name,
+)
 from app.domains.ingestion.schemas import (
     CanonicalDutyStatus,
     DCWCanonicalHOSLog,
     DCWGpsBreadcrumb,
+    DriverRosterEntry,
+    VehicleRosterEntry,
 )
 
 logger = logging.getLogger("dcw.adapters.samsara")
@@ -73,6 +82,101 @@ _NO_VEHICLE_SENTINEL = "0"
 
 # Statute mile → kilometre (live-verified GPS field is ``speedMilesPerHour``).
 _MPH_TO_KMH = 1.609344
+
+
+def _driver_dict_from_sdk(driver: Any) -> dict[str, Any]:
+    if hasattr(driver, "model_dump"):
+        return driver.model_dump(by_alias=True, exclude_unset=True)
+    if isinstance(driver, dict):
+        return driver
+    return {}
+
+
+def samsara_vehicle_assignment_from_driver(plain: dict[str, Any]) -> str | None:
+    """Prefer currentVehicle when present; else staticAssignedVehicle."""
+    current = plain.get("currentVehicle") or plain.get("current_vehicle")
+    if isinstance(current, dict) and current.get("id"):
+        vehicle_id = str(current["id"])
+        if vehicle_id != _NO_VEHICLE_SENTINEL:
+            return vehicle_id
+    if isinstance(current, str) and current and current != _NO_VEHICLE_SENTINEL:
+        return current
+
+    static = plain.get("staticAssignedVehicle") or plain.get("static_assigned_vehicle")
+    if isinstance(static, dict) and static.get("id"):
+        vehicle_id = str(static["id"])
+        if vehicle_id != _NO_VEHICLE_SENTINEL:
+            return vehicle_id
+    if isinstance(static, str) and static and static != _NO_VEHICLE_SENTINEL:
+        return static
+    return None
+
+
+def map_samsara_vehicle_to_roster_entry(
+    vehicle: dict[str, Any],
+    *,
+    tenant_id: str,
+) -> VehicleRosterEntry | None:
+    """Map a Samsara vehicle dict to ``VehicleRosterEntry``."""
+    vehicle_id = nonempty_str(vehicle.get("id"))
+    if not vehicle_id or vehicle_id == _NO_VEHICLE_SENTINEL:
+        return None
+    return VehicleRosterEntry(
+        provider="samsara",
+        tenant_id=tenant_id,
+        external_device_id=vehicle_id,
+        name=nonempty_str(vehicle.get("name")),
+        vin=nonempty_str(vehicle.get("vin")),
+        current_driver_id=None,
+    )
+
+
+def map_samsara_driver_to_roster_entry(
+    driver: dict[str, Any],
+    *,
+    tenant_id: str,
+    hos_vehicle_id: str | None = None,
+    unit_label: str | None = None,
+) -> DriverRosterEntry | None:
+    """Map a Samsara `/fleet/drivers` dict to ``DriverRosterEntry``.
+
+    Completeness uses display name + phone (first/last are soft-split).
+    Unit assignment = roster vehicle OR recent HOS vehicle.
+    """
+    uid = nonempty_str(driver.get("id"))
+    if not uid:
+        return None
+
+    name = nonempty_str(driver.get("name"))
+    first, last = split_display_name(name)
+    phone = normalize_phone_e164(driver.get("phone"))
+    activation = nonempty_str(
+        driver.get("driverActivationStatus") or driver.get("driver_activation_status")
+    )
+    is_active = (activation or "active").lower() == "active"
+    roster_vehicle = samsara_vehicle_assignment_from_driver(driver)
+    device_id = roster_vehicle or nonempty_str(hos_vehicle_id)
+
+    return DriverRosterEntry(
+        provider="samsara",
+        tenant_id=tenant_id,
+        external_driver_id=uid,
+        first_name=first,
+        last_name=last,
+        display_name=name,
+        phone_e164=phone,
+        current_device_id=device_id,
+        unit_label=nonempty_str(unit_label),
+        is_active=is_active,
+        profile_complete=derive_profile_complete(
+            first_name=first,
+            last_name=last,
+            display_name=name,
+            phone_e164=phone,
+            require_first_last=False,
+        ),
+        has_unit_assignment=derive_has_unit_assignment(device_id),
+    )
 
 
 def _map_samsara_status(status_str: str | None) -> CanonicalDutyStatus:
@@ -491,3 +595,139 @@ class SamsaraAdapter(BaseTelematicsAdapter):
             next_cursor or "(empty)",
         )
         return records, next_cursor
+
+    async def _list_all_drivers(self) -> list[dict[str, Any]]:
+        assert self.client is not None
+        drivers: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for activation in ("active", "deactivated"):
+            pager = await self.client.drivers.list(
+                driver_activation_status=activation, limit=100
+            )
+            async for driver in pager:
+                plain = _driver_dict_from_sdk(driver)
+                uid = nonempty_str(plain.get("id"))
+                if uid and uid in seen:
+                    continue
+                if uid:
+                    seen.add(uid)
+                plain.setdefault("driverActivationStatus", activation)
+                drivers.append(plain)
+        return drivers
+
+    async def _list_all_vehicles(self) -> list[dict[str, Any]]:
+        assert self.client is not None
+        vehicles: list[dict[str, Any]] = []
+        pager = await self.client.vehicles.list(limit=100)
+        async for vehicle in pager:
+            plain = _driver_dict_from_sdk(vehicle)
+            if plain:
+                vehicles.append(plain)
+        return vehicles
+
+    async def _recent_hos_vehicle_map(self, hours: int) -> dict[str, str]:
+        """Map driver_id → most recent non-sentinel vehicle id from HOS logs."""
+        assert self.client is not None
+        now = datetime.now(UTC)
+        start = now - timedelta(hours=hours)
+        start_str = start.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        end_str = now.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+        driver_to_vehicle: dict[str, str] = {}
+        after: str | None = None
+        try:
+            while True:
+                response = await self.client.hours_of_service.get_hos_logs(
+                    start_time=start_str,
+                    end_time=end_str,
+                    after=after,
+                )
+                data = getattr(response, "data", None) or []
+                for group in data:
+                    driver_obj = getattr(group, "driver", None)
+                    if driver_obj is None:
+                        continue
+                    driver_plain = _driver_dict_from_sdk(driver_obj)
+                    driver_id = nonempty_str(driver_plain.get("id"))
+                    if not driver_id:
+                        continue
+                    hos_logs = (
+                        getattr(group, "hos_logs", None)
+                        or getattr(group, "hosLogs", None)
+                        or []
+                    )
+                    for entry in hos_logs:
+                        entry_plain = _driver_dict_from_sdk(entry)
+                        vehicle = entry_plain.get("vehicle")
+                        if isinstance(vehicle, dict) and vehicle.get("id"):
+                            vid = str(vehicle["id"])
+                            if vid != _NO_VEHICLE_SENTINEL:
+                                driver_to_vehicle[driver_id] = vid
+                pagination = getattr(response, "pagination", None)
+                end_cursor = getattr(pagination, "end_cursor", None) if pagination else None
+                has_next = getattr(pagination, "has_next_page", False) if pagination else False
+                if not has_next or not end_cursor:
+                    break
+                after = end_cursor
+        except Exception as exc:
+            logger.warning("Samsara HOS assignment signal failed: %s", exc)
+            return driver_to_vehicle
+        return driver_to_vehicle
+
+    async def fetch_vehicle_roster(self, tenant_id: str) -> list[VehicleRosterEntry]:
+        """Fetch Samsara vehicles as canonical vehicle roster DTOs."""
+        if self.client is None:
+            await self.connect()
+            assert self.client is not None
+
+        raw_vehicles = await self._list_all_vehicles()
+        entries: list[VehicleRosterEntry] = []
+        for vehicle in raw_vehicles:
+            entry = map_samsara_vehicle_to_roster_entry(vehicle, tenant_id=tenant_id)
+            if entry is not None:
+                entries.append(entry)
+        logger.info("Samsara vehicle roster: %d vehicles (tenant=%s)", len(entries), tenant_id)
+        return entries
+
+    async def fetch_driver_roster(self, tenant_id: str) -> list[DriverRosterEntry]:
+        """Fetch Samsara drivers + vehicle assignment as roster DTOs.
+
+        Does not filter or alter HOS ingestion — roster is a separate cache.
+        """
+        if self.client is None:
+            await self.connect()
+            assert self.client is not None
+
+        hours = settings.ROSTER_ASSIGNMENT_LOOKBACK_HOURS
+        raw_drivers = await self._list_all_drivers()
+        raw_vehicles = await self._list_all_vehicles()
+        hos_vehicle_map = await self._recent_hos_vehicle_map(hours)
+        vehicle_labels = {
+            str(v["id"]): nonempty_str(v.get("name"))
+            for v in raw_vehicles
+            if v.get("id") is not None
+        }
+
+        entries: list[DriverRosterEntry] = []
+        for plain in raw_drivers:
+            uid = nonempty_str(plain.get("id"))
+            roster_vehicle = samsara_vehicle_assignment_from_driver(plain)
+            hos_vehicle = hos_vehicle_map.get(uid) if uid else None
+            device_id = roster_vehicle or hos_vehicle
+            entry = map_samsara_driver_to_roster_entry(
+                plain,
+                tenant_id=tenant_id,
+                hos_vehicle_id=hos_vehicle,
+                unit_label=vehicle_labels.get(device_id) if device_id else None,
+            )
+            if entry is not None:
+                entries.append(entry)
+
+        logger.info(
+            "Samsara driver roster: %d drivers (%d active, %d with unit) tenant=%s",
+            len(entries),
+            sum(1 for e in entries if e.is_active),
+            sum(1 for e in entries if e.has_unit_assignment),
+            tenant_id,
+        )
+        return entries

@@ -20,6 +20,26 @@
       <input type="search" name="q" value="{{ q or '' }}" placeholder="name or ID" />
     </label>
     <label>
+      Assignment
+      <select name="assignment">
+        <option value="assigned" {% if assignment == 'assigned' %}selected{% endif %}>Assigned</option>
+        <option value="unassigned" {% if assignment == 'unassigned' %}selected{% endif %}>Unassigned</option>
+        <option value="all" {% if assignment == 'all' %}selected{% endif %}>All</option>
+      </select>
+    </label>
+    <label>
+      Profile
+      <select name="profile">
+        <option value="complete" {% if profile == 'complete' %}selected{% endif %}>Complete</option>
+        <option value="incomplete" {% if profile == 'incomplete' %}selected{% endif %}>Incomplete</option>
+        <option value="all" {% if profile == 'all' %}selected{% endif %}>All</option>
+      </select>
+    </label>
+    <label class="drivers-filters-check">
+      <input type="checkbox" name="on_unit" value="true" {% if on_unit %}checked{% endif %} />
+      On a unit
+    </label>
+    <label>
       Status
       <select name="status">
         <option value="" {% if not status %}selected{% endif %}>All</option>
@@ -46,7 +66,7 @@
   <div class="panel-meta">
     <span id="drivers-count">{% if filtered %}{{ drivers|length }} of {{ total_drivers }}{% else %}{{ drivers|length }}{% endif %} drivers</span>
     <span>Display TZ: {{ timezone }}{% if tz_abbrev %} ({{ tz_abbrev }}){% endif %}</span>
-    <span class="hint">List refreshes every 45s</span>
+    <span class="hint">List refreshes every 45s · default Assigned + complete contact</span>
   </div>
 
   <table class="driver-table"
@@ -95,7 +115,11 @@
       const q = (form.querySelector('[name="q"]')?.value || "").trim();
       const status = (form.querySelector('[name="status"]')?.value || "").trim();
       const mode = (form.querySelector('[name="mode"]')?.value || "").trim();
-      return !!(q || status || mode);
+      const assignment = (form.querySelector('[name="assignment"]')?.value || "assigned").trim();
+      const profile = (form.querySelector('[name="profile"]')?.value || "complete").trim();
+      const onUnit = !!form.querySelector('[name="on_unit"]')?.checked;
+      const nonDefault = assignment !== "assigned" || profile !== "complete" || onUnit;
+      return !!(q || status || mode || nonDefault);
     },
     rowCount() {
       const tbody = document.getElementById("driver-rows");

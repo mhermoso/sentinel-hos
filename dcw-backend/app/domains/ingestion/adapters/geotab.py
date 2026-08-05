@@ -10,10 +10,13 @@ Also maps Geotab ``LogRecord`` GPS breadcrumbs (ADR-007).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import mygeotab
+import mygeotab.serializers as geo_serializers
 from pydantic import ValidationError
 
 from app.core.config import settings
@@ -24,13 +27,23 @@ from app.domains.ingestion.normalizer import (
     normalize_timestamp,
     sanitize_raw_payload,
 )
+from app.domains.ingestion.roster import (
+    derive_has_unit_assignment,
+    derive_profile_complete,
+    nonempty_str,
+    normalize_phone_e164,
+)
 from app.domains.ingestion.schemas import (
     CanonicalDutyStatus,
     DCWCanonicalHOSLog,
     DCWGpsBreadcrumb,
+    DriverRosterEntry,
+    VehicleRosterEntry,
 )
 
 logger = logging.getLogger("dcw.adapters.geotab")
+
+_GEOTAB_NO_USER = "NoUserId"
 
 
 # ── Mapping Logic (from tested geotab_ingestor.py) ──────────────────────
@@ -234,6 +247,116 @@ def map_geotab_log_record_to_breadcrumb(
     )
 
 
+# ── Roster mapping (pure; unit-tested) ───────────────────────────────────
+
+
+def _geotab_serialize(raw: Any) -> dict[str, Any] | None:
+    plain = json.loads(geo_serializers.json_serialize(raw))
+    return plain if isinstance(plain, dict) else None
+
+
+def _geotab_driver_id_from_log(plain: dict[str, Any]) -> str:
+    driver_ref = plain.get("driver")
+    if isinstance(driver_ref, dict) and driver_ref.get("id"):
+        return str(driver_ref["id"])
+    if isinstance(driver_ref, str) and driver_ref and driver_ref != _GEOTAB_NO_USER:
+        return driver_ref
+    return _GEOTAB_NO_USER
+
+
+def _geotab_device_id_from_log(plain: dict[str, Any]) -> str | None:
+    device = plain.get("device")
+    if isinstance(device, dict) and device.get("id"):
+        return str(device["id"])
+    if isinstance(device, str) and device:
+        return device
+    return None
+
+
+def map_geotab_device_to_roster_entry(
+    device: dict[str, Any],
+    *,
+    tenant_id: str,
+    current_driver_id: str | None = None,
+) -> VehicleRosterEntry | None:
+    """Map a Geotab Device dict to ``VehicleRosterEntry``."""
+    device_id = nonempty_str(device.get("id"))
+    if not device_id:
+        return None
+    return VehicleRosterEntry(
+        provider="geotab",
+        tenant_id=tenant_id,
+        external_device_id=device_id,
+        name=nonempty_str(device.get("name")),
+        vin=nonempty_str(device.get("vehicleIdentificationNumber")),
+        current_driver_id=current_driver_id,
+    )
+
+
+def map_geotab_user_to_roster_entry(
+    user: dict[str, Any],
+    *,
+    tenant_id: str,
+    current_device_id: str | None = None,
+    unit_label: str | None = None,
+) -> DriverRosterEntry | None:
+    """Map a Geotab User dict to ``DriverRosterEntry``.
+
+    ``isDriver=False`` users are skipped. Completeness requires first+last+phone.
+    """
+    uid = nonempty_str(user.get("id"))
+    if not uid:
+        return None
+    if user.get("isDriver") is False:
+        return None
+
+    first = nonempty_str(user.get("firstName"))
+    last = nonempty_str(user.get("lastName"))
+    name = nonempty_str(user.get("name"))
+    display = f"{first or ''} {last or ''}".strip() or name
+    phone = normalize_phone_e164(user.get("phoneNumber"))
+    device_id = nonempty_str(current_device_id)
+    return DriverRosterEntry(
+        provider="geotab",
+        tenant_id=tenant_id,
+        external_driver_id=uid,
+        first_name=first,
+        last_name=last,
+        display_name=display,
+        phone_e164=phone,
+        current_device_id=device_id,
+        unit_label=nonempty_str(unit_label),
+        is_active=True,
+        profile_complete=derive_profile_complete(
+            first_name=first,
+            last_name=last,
+            display_name=display,
+            phone_e164=phone,
+            require_first_last=True,
+        ),
+        has_unit_assignment=derive_has_unit_assignment(device_id),
+    )
+
+
+def geotab_assignment_from_duty_logs(
+    logs: list[dict[str, Any]],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Infer driver→device and device→driver maps from DutyStatusLog rows.
+
+    Later events overwrite earlier ones (caller should pass time-sorted logs).
+    """
+    driver_to_device: dict[str, str] = {}
+    device_to_driver: dict[str, str] = {}
+    for plain in logs:
+        driver_id = _geotab_driver_id_from_log(plain)
+        device_id = _geotab_device_id_from_log(plain)
+        if driver_id == _GEOTAB_NO_USER or not device_id:
+            continue
+        driver_to_device[driver_id] = device_id
+        device_to_driver[device_id] = driver_id
+    return driver_to_device, device_to_driver
+
+
 # ── Adapter Class ────────────────────────────────────────────────────────
 
 
@@ -394,3 +517,105 @@ class GeotabAdapter(BaseTelematicsAdapter):
         records = feed_response.get("result", feed_response.get("data", []))
         to_version = feed_response.get("toVersion", from_cursor)
         return list(records), str(to_version)
+
+    def _fetch_users_sync(self) -> list[dict[str, Any]]:
+        assert self.api is not None
+        try:
+            raw_users = self.api.get("User", search={"isDriver": True})
+        except Exception as exc:
+            logger.warning("Geotab UserSearch isDriver failed (%s); fetching all User", exc)
+            raw_users = self.api.get("User")
+        users: list[dict[str, Any]] = []
+        for raw in raw_users:
+            plain = _geotab_serialize(raw)
+            if plain is None:
+                continue
+            if plain.get("isDriver") is False:
+                continue
+            users.append(plain)
+        return users
+
+    def _fetch_devices_sync(self) -> list[dict[str, Any]]:
+        assert self.api is not None
+        devices: list[dict[str, Any]] = []
+        for raw in self.api.get("Device"):
+            plain = _geotab_serialize(raw)
+            if plain is not None:
+                devices.append(plain)
+        return devices
+
+    def _fetch_assignment_signal_sync(self, hours: int) -> dict[str, str]:
+        """Return driver_id → most recent device_id from recent DutyStatusLog."""
+        assert self.api is not None
+        from_date = datetime.now(UTC) - timedelta(hours=hours)
+        from_date_iso = from_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        try:
+            raw_logs = self.api.get("DutyStatusLog", search={"fromDate": from_date_iso})
+        except Exception as exc:
+            logger.warning("Geotab DutyStatusLog assignment signal failed: %s", exc)
+            return {}
+
+        serialized: list[dict[str, Any]] = []
+        for raw in raw_logs:
+            plain = _geotab_serialize(raw)
+            if plain is not None:
+                serialized.append(plain)
+        serialized.sort(key=lambda r: str(r.get("dateTime") or r.get("date") or ""))
+        driver_to_device, _ = geotab_assignment_from_duty_logs(serialized)
+        return driver_to_device
+
+    async def fetch_vehicle_roster(self, tenant_id: str) -> list[VehicleRosterEntry]:
+        """Fetch Geotab Device rows as canonical vehicle roster DTOs."""
+        if self.api is None:
+            await self.connect()
+            assert self.api is not None
+
+        devices = await asyncio.to_thread(self._fetch_devices_sync)
+        entries: list[VehicleRosterEntry] = []
+        for device in devices:
+            entry = map_geotab_device_to_roster_entry(device, tenant_id=tenant_id)
+            if entry is not None:
+                entries.append(entry)
+        logger.info("Geotab vehicle roster: %d devices (tenant=%s)", len(entries), tenant_id)
+        return entries
+
+    async def fetch_driver_roster(self, tenant_id: str) -> list[DriverRosterEntry]:
+        """Fetch Geotab Users + recent HOS device links as roster DTOs.
+
+        Does not filter or alter HOS ingestion — roster is a separate cache.
+        """
+        if self.api is None:
+            await self.connect()
+            assert self.api is not None
+
+        hours = settings.ROSTER_ASSIGNMENT_LOOKBACK_HOURS
+        # Sequential: mygeotab API session is not safe for concurrent calls.
+        users = await asyncio.to_thread(self._fetch_users_sync)
+        devices = await asyncio.to_thread(self._fetch_devices_sync)
+        driver_to_device = await asyncio.to_thread(self._fetch_assignment_signal_sync, hours)
+        device_labels = {
+            str(d["id"]): nonempty_str(d.get("name"))
+            for d in devices
+            if d.get("id") is not None
+        }
+
+        entries: list[DriverRosterEntry] = []
+        for user in users:
+            uid = nonempty_str(user.get("id"))
+            device_id = driver_to_device.get(uid) if uid else None
+            entry = map_geotab_user_to_roster_entry(
+                user,
+                tenant_id=tenant_id,
+                current_device_id=device_id,
+                unit_label=device_labels.get(device_id) if device_id else None,
+            )
+            if entry is not None:
+                entries.append(entry)
+
+        logger.info(
+            "Geotab driver roster: %d drivers (%d with unit) tenant=%s",
+            len(entries),
+            sum(1 for e in entries if e.has_unit_assignment),
+            tenant_id,
+        )
+        return entries

@@ -7,9 +7,12 @@ the ingestion poller can poll any provider through a uniform contract.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Tuple
 
-from app.domains.ingestion.schemas import DCWCanonicalHOSLog
+from app.domains.ingestion.schemas import (
+    DCWCanonicalHOSLog,
+    DriverRosterEntry,
+    VehicleRosterEntry,
+)
 
 
 class BaseTelematicsAdapter(ABC):
@@ -37,4 +40,17 @@ class BaseTelematicsAdapter(ABC):
         Returns:
             Tuple of (validated canonical logs, next cursor token).
         """
+        ...
+
+    @abstractmethod
+    async def fetch_driver_roster(self, tenant_id: str) -> list[DriverRosterEntry]:
+        """Fetch the provider's driver roster as canonical DTOs.
+
+        Never used to filter HOS at ingest — roster sync is a separate path.
+        """
+        ...
+
+    @abstractmethod
+    async def fetch_vehicle_roster(self, tenant_id: str) -> list[VehicleRosterEntry]:
+        """Fetch vehicles/devices as canonical DTOs (unit labels / VIN)."""
         ...

@@ -137,3 +137,39 @@ class IngestionBatchResult(BaseModel):
     records_rejected: int = 0
     next_cursor: str = ""
     driver_ids_seen: list[str] = Field(default_factory=list)
+
+
+class DriverRosterEntry(BaseModel):
+    """Provider-agnostic driver roster row for sync + dashboard filters.
+
+    Built by telematics adapters; never carries Geotab/Samsara/Motive types
+    into the dashboard layer.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str = Field(..., description="geotab | samsara | motive")
+    tenant_id: str = Field(..., description="Fleet partition key (fleet_id)")
+    external_driver_id: str = Field(..., description="Provider driver/user id")
+    first_name: str | None = None
+    last_name: str | None = None
+    display_name: str | None = None
+    phone_e164: str | None = None
+    current_device_id: str | None = None
+    unit_label: str | None = None
+    is_active: bool = True
+    profile_complete: bool = False
+    has_unit_assignment: bool = False
+
+
+class VehicleRosterEntry(BaseModel):
+    """Minimal vehicle roster row (unit label / VIN / optional current driver)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    tenant_id: str
+    external_device_id: str
+    name: str | None = None
+    vin: str | None = None
+    current_driver_id: str | None = None

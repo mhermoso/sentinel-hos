@@ -147,6 +147,13 @@ class Settings(BaseSettings):
     # ── Ingestion Poller ─────────────────────────────────────────────────
     POLL_INTERVAL_SECONDS: int = 120
     FEED_RESULTS_LIMIT: int = 5000
+    ROSTER_ASSIGNMENT_LOOKBACK_HOURS: int = Field(
+        default=72,
+        description=(
+            "Lookback window when inferring driver↔device links from recent "
+            "HOS for roster sync (Geotab DutyStatusLog / Samsara HOS logs)"
+        ),
+    )
     HISTORY_BACKFILL_ON_STARTUP: bool = Field(
         default=True,
         description=(

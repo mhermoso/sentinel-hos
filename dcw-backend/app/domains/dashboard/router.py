@@ -53,6 +53,7 @@ from app.domains.dashboard.day_builder import (
     markers_from_audit_violations,
     merge_alert_markers,
 )
+from app.domains.dashboard.driver_filters import filter_drivers
 from app.domains.dashboard.driver_names import resolve_driver_name
 from app.domains.dashboard.fleet_select import resolve_fleet
 from app.domains.dashboard.route_builder import build_day_route_payload
@@ -90,6 +91,7 @@ from app.domains.engine.models import AuditRecord
 from app.domains.engine.repository import EngineRepository
 from app.domains.ingestion.models import CanonicalHOSLogRecord
 from app.domains.ingestion.repository import IngestionRepository
+from app.domains.ingestion.roster_repository import RosterRepository
 from app.domains.notifier.alert_logger import read_alert_log
 
 logger = logging.getLogger("dcw.dashboard.router")
@@ -109,8 +111,9 @@ async def _list_all_drivers(
     session: AsyncSession,
     tenant_id: str,
 ) -> list[DriverListItemResponse]:
-    """Union of distinct PG drivers + Redis active set."""
+    """Union of distinct PG drivers + Redis active set + roster people."""
     active_ids = set(await IngestionRepository.get_active_driver_ids(tenant_id))
+    roster_by_id = await RosterRepository(session).map_by_external_id(tenant_id)
 
     stmt = (
         select(
@@ -141,27 +144,59 @@ async def _list_all_drivers(
         )
         status_result = await session.execute(status_stmt)
         current_status = status_result.scalar_one_or_none()
+        roster = roster_by_id.get(row.driver_id)
 
         by_id[row.driver_id] = DriverListItemResponse(
             driver_id=row.driver_id,
-            driver_name=resolve_driver_name(row.driver_id, row.driver_name),
+            driver_name=resolve_driver_name(
+                row.driver_id,
+                roster.display_name if roster and roster.display_name else row.driver_name,
+            ),
             tenant_id=tenant_id,
             is_live=row.driver_id in active_ids,
             event_count=int(row.event_count),
             first_event_at=row.first_event_at,
             last_event_at=row.last_event_at,
             current_status=current_status,
+            roster_active=roster.is_active if roster else None,
+            profile_complete=roster.profile_complete if roster else None,
+            has_unit_assignment=roster.has_unit_assignment if roster else None,
+            unit_label=roster.unit_label if roster else None,
         )
 
     for driver_id in active_ids:
         if driver_id in by_id:
             continue
+        roster = roster_by_id.get(driver_id)
         by_id[driver_id] = DriverListItemResponse(
             driver_id=driver_id,
-            driver_name=resolve_driver_name(driver_id),
+            driver_name=resolve_driver_name(
+                driver_id,
+                roster.display_name if roster else None,
+            ),
             tenant_id=tenant_id,
             is_live=True,
             event_count=0,
+            roster_active=roster.is_active if roster else None,
+            profile_complete=roster.profile_complete if roster else None,
+            has_unit_assignment=roster.has_unit_assignment if roster else None,
+            unit_label=roster.unit_label if roster else None,
+        )
+
+    # Include roster people who have no HOS events yet (Assigned view).
+    for external_id, roster in roster_by_id.items():
+        if external_id in by_id:
+            continue
+        by_id[external_id] = DriverListItemResponse(
+            driver_id=external_id,
+            driver_name=resolve_driver_name(external_id, roster.display_name),
+            tenant_id=tenant_id,
+            is_live=external_id in active_ids,
+            event_count=0,
+            roster_active=roster.is_active,
+            profile_complete=roster.profile_complete,
+            has_unit_assignment=roster.has_unit_assignment,
+            unit_label=roster.unit_label,
         )
 
     drivers = sorted(
@@ -449,11 +484,37 @@ async def health_check(
 async def list_drivers(
     request: Request,
     fleet: str | None = Query(default=None, description="Fleet id (tenant scope)"),
+    q: str | None = Query(default=None, description="Search name or driver id"),
+    status_filter: str | None = Query(
+        default=None, alias="status", description="Duty status filter"
+    ),
+    mode: str | None = Query(default=None, description="live | historical"),
+    assignment: str | None = Query(
+        default="assigned",
+        description="assigned | unassigned | all (default assigned)",
+    ),
+    profile: str | None = Query(
+        default="complete",
+        description="complete | incomplete | all (default complete)",
+    ),
+    on_unit: bool | None = Query(
+        default=None,
+        description="When true, only drivers with a current unit assignment",
+    ),
     session: AsyncSession = Depends(get_session),
 ) -> DriverListResponse:
-    """Return all drivers with historical HOS logs and/or live Redis presence."""
+    """Return drivers with historical HOS and/or live presence, roster-filtered."""
     active = await resolve_fleet(request, fleet_param=fleet)
-    drivers = await _list_all_drivers(session, active.fleet_id)
+    all_drivers = await _list_all_drivers(session, active.fleet_id)
+    drivers = filter_drivers(
+        all_drivers,
+        q=q,
+        status=status_filter,
+        mode=mode,
+        assignment=assignment,
+        profile=profile,
+        on_unit=on_unit,
+    )
     return DriverListResponse(
         tenant_id=active.fleet_id,
         timezone=settings.DEFAULT_HOME_TERMINAL_TIMEZONE,

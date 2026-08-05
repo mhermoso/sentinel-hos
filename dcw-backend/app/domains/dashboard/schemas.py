@@ -35,6 +35,11 @@ class DriverListItemResponse(BaseModel):
     first_event_at: datetime | None = None
     last_event_at: datetime | None = None
     current_status: str | None = None
+    # Roster-derived flags (None when no driver_roster row yet)
+    roster_active: bool | None = None
+    profile_complete: bool | None = None
+    has_unit_assignment: bool | None = None
+    unit_label: str | None = None
 
 
 class DriverListResponse(BaseModel):
