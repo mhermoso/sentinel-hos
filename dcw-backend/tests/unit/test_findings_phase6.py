@@ -174,6 +174,64 @@ def test_pc_abuse_after_hours_exhaust() -> None:
     )
 
 
+def test_pc_abuse_after_hours_cleared_by_shift_reset() -> None:
+    """Prior-shift PC after 11h must not keep firing after a qualifying ≥10h reset."""
+    events = [
+        _evt(CanonicalDutyStatus.OFF_DUTY, 0),
+        _evt(CanonicalDutyStatus.DRIVING, 10),
+        _evt(CanonicalDutyStatus.PERSONAL_CONVEYANCE, 21.2),  # after shift-A exhaust
+        _evt(CanonicalDutyStatus.OFF_DUTY, 21.5),
+        _evt(CanonicalDutyStatus.ON_DUTY, 34),  # ≥10h rest → new shift, no re-exhaust
+        _evt(CanonicalDutyStatus.SLEEPER_BERTH, 35),
+    ]
+    result = RulePack().evaluate(_timeline(*events), inputs_hash="h", as_of=_ts(40))
+    after_hours = [
+        v
+        for v in result.violations
+        if v.violation_type == ViolationType.PC_ABUSE
+        and "exhausted" in v.description.lower()
+    ]
+    assert after_hours == []
+
+
+def test_pc_abuse_after_hours_fires_after_reset_and_re_exhaust() -> None:
+    """After reset, driving to 11h again then PC must still flag after-hours abuse."""
+    events = [
+        _evt(CanonicalDutyStatus.OFF_DUTY, 0),
+        _evt(CanonicalDutyStatus.DRIVING, 10),
+        _evt(CanonicalDutyStatus.PERSONAL_CONVEYANCE, 21.2),
+        _evt(CanonicalDutyStatus.OFF_DUTY, 21.5),
+        _evt(CanonicalDutyStatus.DRIVING, 34),  # new shift; drive another 11h
+        _evt(CanonicalDutyStatus.PERSONAL_CONVEYANCE, 45),
+        _evt(CanonicalDutyStatus.OFF_DUTY, 45.5),
+    ]
+    result = RulePack().evaluate(_timeline(*events), inputs_hash="h", as_of=_ts(45.5))
+    assert any(
+        v.violation_type == ViolationType.PC_ABUSE
+        and "exhausted" in v.description.lower()
+        for v in result.violations
+    )
+
+
+def test_pc_abuse_after_hours_via_duty_window() -> None:
+    """14h window exhaust in the current shift (little driving) then PC fires after-hours."""
+    events = [
+        _evt(CanonicalDutyStatus.OFF_DUTY, 0),
+        _evt(CanonicalDutyStatus.ON_DUTY, 10),  # duty window starts
+        _evt(CanonicalDutyStatus.DRIVING, 10.5),  # brief drive; window still governs
+        _evt(CanonicalDutyStatus.ON_DUTY, 11),
+        # Window exhaust at 10+14=24; PC after that
+        _evt(CanonicalDutyStatus.PERSONAL_CONVEYANCE, 24.5),
+        _evt(CanonicalDutyStatus.OFF_DUTY, 25),
+    ]
+    result = RulePack().evaluate(_timeline(*events), inputs_hash="h", as_of=_ts(25))
+    assert any(
+        v.violation_type == ViolationType.PC_ABUSE
+        and "exhausted" in v.description.lower()
+        for v in result.violations
+    )
+
+
 def test_pc_abuse_toward_next_load() -> None:
     load = WorkReportingLocation(latitude=32.0, longitude=-97.0)
     # PC moves from far to near load (~3+ air-miles closer)

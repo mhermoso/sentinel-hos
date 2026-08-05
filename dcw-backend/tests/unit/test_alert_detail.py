@@ -436,8 +436,8 @@ def test_contributing_logs_pc_abuse_scopes_pre_exhaust_pc() -> None:
         assert post["contributed"] is True
 
 
-def test_contributing_logs_pc_abuse_includes_pc_before_current_shift() -> None:
-    """PC_ABUSE can fire on timeline PC outside the current shift; list must still show it."""
+def test_contributing_logs_pc_abuse_no_after_hours_across_shift_reset() -> None:
+    """After qualifying reset, prior-shift post-exhaust PC must not match after-hours."""
     # Drive to 11h exhaust, PC after exhaust, ≥10h OFF reset, then a new shift with no PC.
     events = [
         DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(0)),
@@ -464,10 +464,40 @@ def test_contributing_logs_pc_abuse_includes_pc_before_current_shift() -> None:
         source="backtest",
         display_tz_name="America/Chicago",
     )
+    assert detail["meta"]["matched_on_recompute"] is False
+    desc = (detail["meta"].get("description") or "").lower()
+    assert "exhausted" not in desc
+
+
+def test_contributing_logs_pc_abuse_same_shift_after_hours_window() -> None:
+    """Same-shift after-hours: post-exhaust PC contributes; window covers that PC."""
+    # Long continuous shift: early ON context, drive to 11h, PC after exhaust.
+    events = [
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(0)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.ON_DUTY.value, timestamp=_ts(10)),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.DRIVING.value, timestamp=_ts(10.5)),
+        DriverTimeline.HOSEvent(
+            status=CanonicalDutyStatus.PERSONAL_CONVEYANCE.value,
+            timestamp=_ts(21.5),  # after 11h driving from 10.5
+        ),
+        DriverTimeline.HOSEvent(status=CanonicalDutyStatus.OFF_DUTY.value, timestamp=_ts(22)),
+    ]
+    as_of = _ts(22)
+    detail = build_alert_detail(
+        driver_id="drv1",
+        tenant_id="tenant1",
+        driver_name="Test Driver",
+        events=events,
+        as_of=as_of,
+        violation_type="PC_ABUSE",
+        source="backtest",
+        display_tz_name="America/Chicago",
+    )
     assert detail["meta"]["matched_on_recompute"] is True
     assert "exhausted" in detail["meta"]["description"].lower()
     pc_rows = [row for row in detail["contributing_logs"] if row["status"] == "PC"]
-    assert pc_rows, "contributing list must include the prior-shift PC that fired the rule"
-    assert any(row["contributed"] is True for row in pc_rows)
-    assert detail["shift_window"]["label"] == "PC abuse window"
+    assert pc_rows
+    assert all(row["contributed"] is True for row in pc_rows)
     assert detail["contributing_log_totals"]["contributed_seconds"] > 0
+    # Causal/contributing window must include the post-exhaust PC start
+    assert detail["shift_window"]["start_utc"] <= _ts(21.5).isoformat()

@@ -227,17 +227,30 @@ def _hours_exhaust_at(
     state: StateMachineResult,
     as_of: datetime,
 ) -> datetime | None:
-    """Earliest time standard 11h driving or 14h window was exhausted (if any)."""
+    """Earliest time standard 11h driving or 14h window was exhausted (if any).
+
+    Drive exhaust counts only Driving at/after the current shift start (same
+    reset that clears ``duty_window_start``). Without a current shift there is
+    no drive exhaust from pre-shift history. Window exhaust remains
+    ``duty_window_start + 14h`` for the open duty window.
+    """
     duty_start = state.duty_window_start
-    driven = 0.0
+    shift_anchor = (
+        state.current_shift.shift_start if state.current_shift is not None else None
+    )
+
     drive_exhaust: datetime | None = None
-    for status, start, _end, dur in _segment_durations(timeline, as_of):
-        if status != CanonicalDutyStatus.DRIVING.value:
-            continue
-        if driven < MAX_DRIVING_SECONDS <= driven + dur:
-            drive_exhaust = start + timedelta(seconds=MAX_DRIVING_SECONDS - driven)
-            break
-        driven += dur
+    if shift_anchor is not None:
+        driven = 0.0
+        for status, start, _end, dur in _segment_durations(timeline, as_of):
+            if status != CanonicalDutyStatus.DRIVING.value:
+                continue
+            if start < shift_anchor:
+                continue
+            if driven < MAX_DRIVING_SECONDS <= driven + dur:
+                drive_exhaust = start + timedelta(seconds=MAX_DRIVING_SECONDS - driven)
+                break
+            driven += dur
 
     window_exhaust: datetime | None = None
     if duty_start is not None:
@@ -278,21 +291,29 @@ def evaluate_pc_abuse_findings(
 
     exhaust_at = _hours_exhaust_at(timeline, state, now)
     if exhaust_at is not None:
+        shift_anchor = (
+            state.current_shift.shift_start if state.current_shift is not None else None
+        )
         for start, _end in _pc_segments(timeline, now):
-            if start >= exhaust_at - timedelta(seconds=1):
-                findings.append(
-                    Violation(
-                        violation_type=ViolationType.PC_ABUSE,
-                        severity=ViolationSeverity.WARNING,
-                        rule_ref="§ 395.8 / PC guidance",
-                        description=(
-                            "Personal conveyance used after driving or duty-window "
-                            "hours were exhausted. Review for PC abuse."
-                        ),
-                        detected_at=now,
-                    )
+            if start < exhaust_at - timedelta(seconds=1):
+                continue
+            # After-hours PC must belong to the current shift context when one
+            # exists — prior-shift PC after a closed exhaust must not match.
+            if shift_anchor is not None and start < shift_anchor:
+                continue
+            findings.append(
+                Violation(
+                    violation_type=ViolationType.PC_ABUSE,
+                    severity=ViolationSeverity.WARNING,
+                    rule_ref="§ 395.8 / PC guidance",
+                    description=(
+                        "Personal conveyance used after driving or duty-window "
+                        "hours were exhausted. Review for PC abuse."
+                    ),
+                    detected_at=now,
                 )
-                break
+            )
+            break
 
     if annotations.next_load_location is not None:
         for start, end in _pc_segments(timeline, now):
