@@ -14,7 +14,7 @@ or LLM scoring involved (per ADR-004).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
@@ -182,6 +182,27 @@ def run_state_machine(timeline: DriverTimeline) -> StateMachineResult:
                 result.split_sleeper_active = True
             elif duration >= SB_MIN and not result.split_sleeper_active:
                 result.pending_sb_block = (event.timestamp, duration)
+
+    # Qualifying rest that ends the timeline (or is still in progress at as_of)
+    # closes the prior shift. Shift open only happens on the next non-rest event
+    # above; without this, completed 10h OFF leaves stale 11h/14h totals and
+    # false live/day-view violations after the driver has already reset.
+    if consecutive_rest_seconds >= QUALIFYING_OFF_DUTY_SECONDS:
+        if result.current_shift is not None:
+            result.shifts.append(result.current_shift)
+            result.current_shift = None
+        result.driving_since_break_seconds = 0.0
+        result.duty_window_elapsed_seconds = 0.0
+        if consecutive_rest_seconds >= RESTART_SECONDS and consecutive_rest_start is not None:
+            rest_end = consecutive_rest_start + timedelta(seconds=consecutive_rest_seconds)
+            if is_valid_restart_period(
+                consecutive_rest_start,
+                rest_end,
+                home_terminal_tz=home_terminal_tz,
+            ):
+                result.had_34h_restart = True
+                result.last_valid_restart_at = rest_end
+            # Still resting: never emit RESTART_INVALID for an in-progress rest.
 
     # Finalise last shift
     if result.current_shift is not None:
